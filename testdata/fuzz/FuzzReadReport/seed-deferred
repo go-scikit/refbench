@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"schema\":1,\"status\":\"deferred\",\"max_load\":8,\"rows\":[{\"name\":\"a\",\"func\":\"F\",\"parity\":\"none\",\"allocs\":1}]}")
