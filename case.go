@@ -40,6 +40,10 @@ type Case struct {
 	Parity string
 	// Go runs the Go body iters times. It is timed by Run.
 	Go func(iters int)
+	// AllocIters is the number of calls the allocation count averages over (0
+	// means 1). A body that cycles through inputs sets it to the cycle length,
+	// so that every input is counted and the result is exact.
+	AllocIters int
 	// Ref times the reference body, inside the reference's process. Nil for a
 	// case only used by the allocation check.
 	Ref Timer

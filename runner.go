@@ -107,10 +107,12 @@ func (o Options) header(status string) *Report {
 	}
 }
 
-// AllocsPerCall returns the allocations of one call of the Go body, as
-// testing.AllocsPerRun counts them (exact under any load).
+// AllocsPerCall returns the allocations per call of the Go body: the count of
+// AllocIters calls, as testing.AllocsPerRun counts them, divided by AllocIters
+// (exact under any load).
 func AllocsPerCall(c Case) float64 {
-	return testing.AllocsPerRun(50, func() { c.Go(1) })
+	n := max(c.AllocIters, 1)
+	return testing.AllocsPerRun(50, func() { c.Go(n) }) / float64(n)
 }
 
 func (c Case) row(allocs float64) Row {

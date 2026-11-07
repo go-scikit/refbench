@@ -356,6 +356,20 @@ func TestAllocsPerCallCounts(t *testing.T) {
 	if got := AllocsPerCall(c); got != 2 {
 		t.Errorf("allocs = %v", got)
 	}
+	// A body that allocates on every other input, averaged over its cycle.
+	var sink2 []byte
+	c.Go = func(n int) {
+		for i := 0; i < n; i++ {
+			if i%2 == 0 {
+				sink2 = make([]byte, 8)
+			}
+		}
+	}
+	_ = sink2
+	c.AllocIters = 4
+	if got := AllocsPerCall(c); got != 0.5 {
+		t.Errorf("allocs over a cycle = %v", got)
+	}
 }
 
 func writeFile(t *testing.T, dir, name, content string) string {
