@@ -116,7 +116,7 @@ func fixedOpts() Options {
 func TestRunAlternatesAndRecordsLoad(t *testing.T) {
 	var order []string
 	c := goodCase("alt")
-	c.Go = func(int) { order = append(order, "go") }
+	c.Go = func(n int) { order = append(order, "go"); spin(n) }
 	c.Ref = func(iters int) (time.Duration, error) {
 		order = append(order, "ref")
 		return time.Duration(iters) * time.Microsecond, nil

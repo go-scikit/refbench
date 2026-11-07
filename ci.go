@@ -243,19 +243,30 @@ type CIConfig struct {
 	Cases               []Case
 }
 
+func (c CIConfig) withDefaults() CIConfig {
+	def := func(p *string, name string) {
+		if *p == "" {
+			*p = filepath.Join(c.Root, "docs", name)
+		}
+	}
+	def(&c.JSON, "perf.json")
+	def(&c.Table, "perf-table.md")
+	def(&c.Exempt, "perf-exempt.md")
+	return c
+}
+
+// Paths returns the perf.json and perf-table.md paths, defaults filled in.
+func (c CIConfig) Paths() (jsonPath, tablePath string) {
+	c = c.withDefaults()
+	return c.JSON, c.Table
+}
+
 // RunCI is the pull-request check: no Python, no timing. It returns nil when
 // the allocations match perf.json, perf-table.md is what perf.json generates and
 // every public function has a case or a named exemption; otherwise an error
 // listing every problem.
 func RunCI(cfg CIConfig) error {
-	def := func(p *string, name string) {
-		if *p == "" {
-			*p = filepath.Join(cfg.Root, "docs", name)
-		}
-	}
-	def(&cfg.JSON, "perf.json")
-	def(&cfg.Table, "perf-table.md")
-	def(&cfg.Exempt, "perf-exempt.md")
+	cfg = cfg.withDefaults()
 	if err := Validate(cfg.Cases); err != nil {
 		return err
 	}

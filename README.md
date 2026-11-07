@@ -85,15 +85,25 @@ same runner (go-geometry/predicates `bench/` does).
 
 ## CI mode: allocations, table, denominator
 
-No Python, no timing, on every pull request:
+No Python, no timing, on every pull request. `rbtest` is the `go test` glue,
+written once:
 
 ```go
 func TestPerf(t *testing.T) {
-	if err := refbench.RunCI(refbench.CIConfig{Root: "..", Cases: cases}); err != nil {
-		t.Fatal(err)
-	}
+	rbtest.Perf(t, refbench.CIConfig{Root: "..", Cases: cases}, refbench.Options{Repo: "go-x/y"})
 }
 ```
+
+```text
+go test -run TestPerf .                       CI mode (below)
+go test -run TestPerf -cpu 1 -perf.run .      measure; write docs/perf.json and docs/perf-table.md
+go test -run TestPerf -perf.record .          allocation counts only (status: deferred)
+```
+
+`-perf.run` refuses at a load at or above the gate (`-perf.onload=wait
+-perf.wait=1h` waits instead) and then skips the test with the reason and
+writes nothing. Other flags: `-perf.rounds`, `-perf.mintime`, `-perf.maxload`,
+`-perf.commit`, `-perf.machine`. `refbench.RunCI` is what the default mode calls:
 
 1. every case's allocations per call must equal `docs/perf.json`'s (an increase
    is a regression; a decrease must be recorded);
