@@ -14,6 +14,13 @@ cobra command for the files it writes.
 import "github.com/go-scikit/refbench"
 ```
 
+## Install
+
+```sh
+go get github.com/go-scikit/refbench@v0.1.0                       # the library, and rbtest
+GOBIN=~/.local/bin go install github.com/go-scikit/refbench/cmd/refbench@v0.1.0
+```
+
 ## What a run does
 
 - **One core on both sides.** `Run` sets `GOMAXPROCS=1` around the whole run
