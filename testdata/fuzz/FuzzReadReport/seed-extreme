@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"schema\":1,\"status\":\"measured\",\"max_load\":8,\"rows\":[{\"name\":\"a\",\"func\":\"F\",\"allocs\":0,\"rounds\":[{\"load_before\":1,\"load_after\":1,\"go_ns\":1e308,\"ref_ns\":1e-308}]}]}")
