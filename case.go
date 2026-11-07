@@ -13,6 +13,7 @@ package refbench
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -75,7 +76,9 @@ var errNoTime = errors.New("a calibration run took no measurable time")
 // Calibrate returns the iteration count for which one run of t lasts at least
 // minDur: it doubles from 1, then scales by the last measurement.
 func Calibrate(t Timer, minDur time.Duration) (int, error) {
-	const maxIters = 1 << 40
+	// 1<<40 on 64-bit targets; half of MaxInt where int is 32 bits (a constant
+	// larger than int does not compile there).
+	const maxIters = min(1<<40, math.MaxInt>>1)
 	iters := 1
 	for {
 		d, err := t(iters)
@@ -87,7 +90,13 @@ func Calibrate(t Timer, minDur time.Duration) (int, error) {
 		}
 		next := iters * 2
 		if d > 0 {
-			if n := int(float64(iters) * float64(minDur) / float64(d) * 1.1); n > next {
+			// Scaled in float64 and bounded before the conversion: a float
+			// outside int's range converts to an unspecified value.
+			f := float64(iters) * float64(minDur) / float64(d) * 1.1
+			if f > maxIters {
+				return 0, errNoTime
+			}
+			if n := int(f); n > next {
 				next = n
 			}
 		}

@@ -88,6 +88,11 @@ func TestCalibrate(t *testing.T) {
 	if _, err := Calibrate(func(int) (time.Duration, error) { return 0, nil }, time.Millisecond); !errors.Is(err, errNoTime) {
 		t.Errorf("err = %v", err)
 	}
+	// A body so fast that the scaled count leaves the iteration bound (1<<40, or
+	// half of MaxInt on a 32-bit int): refused, not converted out of range.
+	if _, err := Calibrate(func(int) (time.Duration, error) { return time.Nanosecond, nil }, time.Hour); !errors.Is(err, errNoTime) {
+		t.Errorf("err = %v", err)
+	}
 	boom := errors.New("boom")
 	if _, err := Calibrate(func(int) (time.Duration, error) { return 0, boom }, time.Millisecond); !errors.Is(err, boom) {
 		t.Errorf("err = %v", err)

@@ -39,6 +39,22 @@ jobs:
           go tool cover -func=cover.out | tail -1 | grep -q '100.0%' || {
             echo "::error::coverage below 100%"; exit 1; }
 
+  # int is 32 bits here: v0.1.0 did not compile on 386 and arm.
+  arch-386:
+    name: arch 386
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.27.3
+      - name: Vet + test (GOARCH=386)
+        run: |
+          GOARCH=386 go vet ./...
+          GOARCH=386 go test ./...
+      - name: Compile tests for 32-bit arm
+        run: GOARCH=arm CGO_ENABLED=0 go test -c -o /dev/null .
+
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
