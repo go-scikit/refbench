@@ -421,8 +421,12 @@ func TestRunCIErrors(t *testing.T) {
 	if err := RunCI(CIConfig{Root: root, Cases: cases, Exempt: filepath.Join(root, "docs")}); err == nil {
 		t.Error("unreadable exemptions accepted")
 	}
-	if err := RunCI(CIConfig{Root: root, Cases: cases, Exempt: filepath.Join(root, "lib.go", "x")}); err == nil {
-		t.Error("exemption path below a file accepted")
+	old := openExempt
+	openExempt = func(string) (*os.File, error) { return nil, os.ErrPermission }
+	err := RunCI(CIConfig{Root: root, Cases: cases})
+	openExempt = old
+	if !errors.Is(err, os.ErrPermission) {
+		t.Errorf("unreadable exemption file: %v", err)
 	}
 	writeFile(t, root, "broken/b.go", "package")
 	if err := RunCI(CIConfig{Root: root, Cases: cases}); err == nil {

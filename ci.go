@@ -243,6 +243,10 @@ type CIConfig struct {
 	Cases               []Case
 }
 
+// openExempt is replaceable by tests: which errors opening a path produces
+// differs between operating systems.
+var openExempt = os.Open
+
 func (c CIConfig) withDefaults() CIConfig {
 	def := func(p *string, name string) {
 		if *p == "" {
@@ -291,7 +295,7 @@ func RunCI(cfg CIConfig) error {
 		errs = append(errs, fmt.Errorf("%s is not what %s generates (run refbench table)", cfg.Table, cfg.JSON))
 	}
 	exempt := map[string]string{}
-	if ef, err := os.Open(cfg.Exempt); err == nil {
+	if ef, err := openExempt(cfg.Exempt); err == nil {
 		exempt, err = ParseExempt(ef)
 		ef.Close()
 		if err != nil {
