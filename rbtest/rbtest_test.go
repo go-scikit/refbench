@@ -125,17 +125,59 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func TestRunGateClosedSkipsAndWritesNothing(t *testing.T) {
+func TestRunGateClosedFailsAndWritesNothing(t *testing.T) {
 	cfg := repo(t, fixedRef)
 	setFlags(t, true, false)
+	*onLoadFlag = refbench.OnLoadRefuse
 	busy := func() (float64, error) { return 99, nil }
 	got := outcome(func() { perf(&fakeT{}, cfg, refbench.Options{Load: busy}) })
-	if !strings.HasPrefix(got, "skip: timing deferred, nothing written") {
+	if !strings.HasPrefix(got, "fatal: timing requested by -perf.run but deferred, nothing written") ||
+		!strings.Contains(got, "load gate did not open") {
 		t.Errorf("got %s", got)
 	}
 	jsonPath, _ := cfg.Paths()
 	if _, err := os.Stat(jsonPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("perf.json written under load: %v", err)
+	}
+}
+
+// A wait that outlasts the busy period measures; a wait that does not, fails.
+func TestRunWaitOpensOrFails(t *testing.T) {
+	cfg := repo(t, fixedRef)
+	setFlags(t, true, false)
+	*onLoadFlag = refbench.OnLoadWait
+	calls := 0
+	clears := func() (float64, error) {
+		calls++
+		if calls < 3 {
+			return 99, nil
+		}
+		return 0, nil
+	}
+	opt := refbench.Options{Load: clears, Poll: time.Millisecond}
+	if got := outcome(func() { perf(&fakeT{}, cfg, opt) }); got != "ok" {
+		t.Errorf("gate opened within the wait: %s", got)
+	}
+	cfg = repo(t, fixedRef)
+	*waitFlag = 20 * time.Millisecond
+	busy := func() (float64, error) { return 99, nil }
+	got := outcome(func() { perf(&fakeT{}, cfg, refbench.Options{Load: busy, Poll: time.Millisecond}) })
+	if !strings.HasPrefix(got, "fatal: timing requested by -perf.run") {
+		t.Errorf("wait timed out: %s", got)
+	}
+}
+
+// Without -perf.run a busy machine changes nothing: the CI mode never times.
+func TestCIModeIgnoresLoad(t *testing.T) {
+	cfg := repo(t, fixedRef)
+	setFlags(t, false, true)
+	busy := func() (float64, error) { return 99, nil }
+	if got := outcome(func() { perf(&fakeT{}, cfg, refbench.Options{Load: busy}) }); got != "ok" {
+		t.Fatal(got)
+	}
+	setFlags(t, false, false)
+	if got := outcome(func() { perf(&fakeT{}, cfg, refbench.Options{Load: busy}) }); got != "ok" {
+		t.Errorf("CI mode under load: %s", got)
 	}
 }
 

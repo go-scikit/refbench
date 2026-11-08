@@ -108,8 +108,9 @@ go test -run TestPerf -perf.record .          allocation counts only (status: de
 ```
 
 `-perf.run` refuses at a load at or above the gate (`-perf.onload=wait
--perf.wait=1h` waits instead) and then skips the test with the reason and
-writes nothing. Other flags: `-perf.rounds`, `-perf.mintime`, `-perf.maxload`,
+-perf.wait=1h` waits instead) and then fails the test with the reason (non-zero exit, so a
+run that measured nothing never reads as `ok`) and writes nothing. Without
+`-perf.run` nothing is timed and the test passes quietly. Other flags: `-perf.rounds`, `-perf.mintime`, `-perf.maxload`,
 `-perf.commit`, `-perf.machine`. `refbench.RunCI` is what the default mode calls:
 
 1. every case's allocations per call must equal `docs/perf.json`'s (an increase
