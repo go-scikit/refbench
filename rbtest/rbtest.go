@@ -11,8 +11,10 @@
 //	go test -run TestPerf -cpu 1 -perf.run .        measure, write docs/perf.json and docs/perf-table.md
 //	go test -run TestPerf -perf.record .            allocation counts only (status: deferred)
 //
-// Timing runs only when the load gate opens; a gate that does not open skips
-// the test with the reason and writes nothing.
+// Timing runs only when the load gate opens. With -perf.run a gate that does
+// not open (refused, or still closed after -perf.wait) fails the test with the
+// reason and writes nothing: an asked-for measurement that did not happen is
+// not a pass. Without -perf.run the test never times anything.
 package rbtest
 
 import (
@@ -65,7 +67,9 @@ func perf(t T, cfg refbench.CIConfig, opt refbench.Options) {
 	case *runFlag:
 		rep, err := refbench.Run(context.Background(), cfg.Cases, opt)
 		if errors.Is(err, refbench.ErrOnLoad) {
-			t.Skipf("timing deferred, nothing written: %v", err)
+			// An explicit timing request that measured nothing is a failure:
+			// a skip prints only PASS without -v.
+			t.Fatalf("timing requested by -perf.run but deferred, nothing written: %v", err)
 		}
 		if err != nil {
 			t.Fatalf("%v", err)
