@@ -39,8 +39,20 @@ GOBIN=~/.local/bin go install github.com/go-scikit/refbench/cmd/refbench@v0.1.0
   before every round, stored with the round, and read again after it. At or
   above `MaxLoad` (default 8) `Run` waits up to `LoadTimeout`
   (`OnLoad: refuse` checks once and refuses); a gate that does not open returns
-  `ErrOnLoad` and no report. A round that ends above the gate marks the report
-  `valid: false`: no verdict, and `refbench issues` files nothing.
+  `ErrOnLoad` when no row could be measured at all. A round that ends above the
+  gate is discarded and **re-run** (the next gate check waits until the load is
+  back under the gate; the round keeps its place in the Go/reference
+  alternation), at most `MaxRetries` times per row (default 10); past the cap that
+  row alone is deferred. Retries are counted per row in `perf.json`.
+- **Partial runs.** A row is *valid* when all its kept rounds started and ended
+  under the gate; valid rows are written on their own, `perf.json` lists the
+  deferred ones (`deferred`), and the table says `partial: N of M rows valid`.
+  A gate that stays closed past `LoadTimeout` stops the run: the rows measured so
+  far are kept, the rest are deferred. `Merge(prev, next)` combines a resumed run
+  (`Options.Only` restricts it to `Pending(prev, cases)`; `CheckResume` refuses
+  another commit, Go version, reference versions or gate) with the previous
+  report; a run is complete when no row is deferred. `refbench issues` drafts
+  from the valid rows only.
 - **Verdict.** `ratio = Go / reference` (median); *slower* when the Go first
   quartile is above the reference third quartile, *faster* when the Go third
   quartile is below the reference first quartile, *tie* otherwise.
@@ -104,14 +116,32 @@ func TestPerf(t *testing.T) {
 ```text
 go test -run TestPerf .                       CI mode (below)
 go test -run TestPerf -cpu 1 -perf.run .      measure; write docs/perf.json and docs/perf-table.md
-go test -run TestPerf -perf.record .          allocation counts only (status: deferred)
+go test -run TestPerf -perf.record .          allocation counts only; recorded timings are kept
+go test -c -o perf.test . && ./perf.test -test.cpu 1 -test.run 'TestPerf$' -perf.run -perf.onload=wait -perf.wait=2h
+./perf.test -test.cpu 1 -test.run 'TestPerf$' -perf.resume -perf.onload=wait -perf.wait=2h
 ```
 
 `-perf.run` refuses at a load at or above the gate (`-perf.onload=wait
--perf.wait=1h` waits instead) and then fails the test with the reason (non-zero exit, so a
-run that measured nothing never reads as `ok`) and writes nothing. Without
-`-perf.run` nothing is timed and the test passes quietly. Other flags: `-perf.rounds`, `-perf.mintime`, `-perf.maxload`,
-`-perf.commit`, `-perf.machine`. `refbench.RunCI` is what the default mode calls:
+-perf.wait=1h` waits instead; `-perf.wait` without `-perf.onload=wait` fails
+with a message naming the missing flag). A round that ends above the gate is
+re-run (`-perf.retries`, default 10 per row, then the row is deferred). When
+every row is valid the test passes; when some rows are deferred the files are
+still written (valid rows, the `deferred` list, the table's `partial: N of M
+rows valid`) and the test **fails** with `partial`, so an incomplete run never
+reads as `ok`. `-perf.resume` re-measures only the deferred rows of the existing
+`docs/perf.json` and merges them, refusing (with the field and both values) when
+the commit (`-perf.commit`), the Go version, the reference versions or the gate
+differ; run it until no row is deferred. A run that measured nothing at all
+fails and writes nothing. `-perf.record` updates only the allocation counts
+(timings, date and commit of the measurement are kept; a new case becomes a
+deferred row). Without `-perf.run` nothing is timed and the test passes
+quietly. Other flags: `-perf.rounds`, `-perf.mintime`, `-perf.maxload`,
+`-perf.commit`, `-perf.machine`.
+
+Nothing is written unless `<root>/go.mod` (the repository's `..` from a `bench/`
+module) declares the parent of the running binary's module path, or the module
+itself: a binary of one repository run from another's `bench/` directory refuses,
+naming both module paths. `refbench.RunCI` is what the default mode calls:
 
 1. every case's allocations per call must equal `docs/perf.json`'s (an increase
    is a regression; a decrease must be recorded);
@@ -135,8 +165,8 @@ refbench load [--max 8]                              print the load; fail at or 
 `perf: <case> is <ratio>x slower than <reference> on one core`, label `perf`, a
 body with the row, the machine, the load of every round, the reference versions
 and the commit (`<case>.title.txt` and `<case>.md` with `--out`, for
-`gh issue create --title ... --body-file`). A deferred or invalid run drafts
-nothing.
+`gh issue create --title ... --body-file`). A deferred report, or one with no
+valid row, drafts nothing; a partial one drafts from its valid rows.
 
 ## Not in v0.1.0
 

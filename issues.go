@@ -26,12 +26,12 @@ func Issues(rep *Report) ([]Issue, error) {
 	switch {
 	case rep.Status != StatusMeasured:
 		return nil, fmt.Errorf("%w (status %s)", ErrInvalidRun, rep.Status)
-	case !rep.Valid:
-		return nil, fmt.Errorf("%w (a round ended above the load gate)", ErrInvalidRun)
+	case rep.ValidRows() == 0:
+		return nil, fmt.Errorf("%w (no row has all its rounds under the load gate)", ErrInvalidRun)
 	}
 	var out []Issue
 	for _, row := range rep.Rows {
-		if row.Verdict != Slower {
+		if !row.Valid || row.Verdict != Slower {
 			continue
 		}
 		out = append(out, Issue{

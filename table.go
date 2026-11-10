@@ -32,7 +32,10 @@ func Table(r *Report) []byte {
 		if r.Valid {
 			b.WriteString("- Run: valid (every round under the gate)\n")
 		} else {
-			b.WriteString("- Run: **invalid** (a round ended above the gate; no verdict)\n")
+			fmt.Fprintf(&b, "- Run: **partial: %d of %d rows valid** (the others are deferred; `-perf.resume` measures only those)\n", r.ValidRows(), len(r.Rows))
+		}
+		if r.Retries > 0 {
+			fmt.Fprintf(&b, "- Retries: %d rounds ended above the gate and were re-run\n", r.Retries)
 		}
 	}
 	b.WriteString("\nns/call, median [first quartile, third quartile]; ratio = Go / reference.\n\n")
@@ -44,7 +47,7 @@ func Table(r *Report) []byte {
 			goCell, refCell = cell(row.Go), cell(row.Ref)
 			ratio = fmt.Sprintf("%.2f", row.Ratio)
 			verdict = row.Verdict
-			if !r.Valid {
+			if !row.Valid {
 				verdict = "invalid"
 			}
 		}

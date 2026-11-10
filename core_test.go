@@ -184,13 +184,179 @@ func TestRunVerdictAndInvalid(t *testing.T) {
 	if rep.Rows[0].Ratio <= 0 {
 		t.Errorf("ratio = %v", rep.Rows[0].Ratio)
 	}
-	// A round that ends at the gate invalidates the run.
+}
+
+// A load source driven by a script: the gate reads and the after-round reads
+// come from the same sequence, the last value forever.
+func TestRunRetriesARoundThatEndsAboveTheGate(t *testing.T) {
+	c := goodCase("retry")
+	c.Ref = fixedRef(time.Millisecond)
 	o := fixedOpts()
-	o.Load = fakeLoad(1, 9)
-	o.Rounds = 1
-	rep, err = Run(context.Background(), []Case{c}, o)
-	if err != nil || rep.Valid {
-		t.Errorf("err = %v, valid = %v", err, rep.Valid)
+	o.Rounds = 2
+	o.Poll = time.Microsecond
+	// gate 1, after 9 (retry), gate 1, after 1 (kept), gate 1, after 1 (kept).
+	o.Load = fakeLoad(1, 9, 1, 1, 1, 1)
+	rep, err := Run(context.Background(), []Case{c}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rep.Rows[0]
+	if len(row.Rounds) != 2 || row.Retries != 1 || rep.Retries != 1 || !row.Valid || !rep.Valid {
+		t.Fatalf("rounds = %d, retries = %d/%d, valid = %v/%v", len(row.Rounds), row.Retries, rep.Retries, row.Valid, rep.Valid)
+	}
+	// The retried round keeps its place in the alternation: Go first, then reference first.
+	for i, rd := range row.Rounds {
+		if rd.LoadAfter >= 8 || rd.GoFirst != (i%2 == 0) {
+			t.Errorf("round %d = %+v", i, rd)
+		}
+	}
+}
+
+func TestRunRetryCapDefersOnlyThatRow(t *testing.T) {
+	bad, good := goodCase("bad"), goodCase("good")
+	bad.Ref, good.Ref = fixedRef(time.Millisecond), fixedRef(time.Millisecond)
+	o := fixedOpts()
+	o.Rounds, o.MaxRetries, o.Poll = 1, 2, time.Microsecond
+	// Calibration does not read the load. "bad": every round ends at 9 (3 reads of
+	// the pair, cap 2 -> the third retry defers it); then "good" runs under 1.
+	vals := []float64{1, 9, 1, 9, 1, 9, 1, 1}
+	o.Load = fakeLoad(vals...)
+	rep, err := Run(context.Background(), []Case{bad, good}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, g := rep.Rows[0], rep.Rows[1]
+	if b.Valid || len(b.Rounds) != 0 || b.Retries != 3 || !g.Valid || len(g.Rounds) != 1 {
+		t.Fatalf("bad = %+v good = %+v", b, g)
+	}
+	if rep.Valid || len(rep.Deferred) != 1 || rep.Deferred[0] != "bad" || rep.ValidRows() != 1 || rep.Retries != 3 {
+		t.Errorf("report: valid %v deferred %v retries %d", rep.Valid, rep.Deferred, rep.Retries)
+	}
+	// Every row capped: nothing measured, no report.
+	o.Load, o.LoadTimeout = fakeLoad(1, 9), 20*time.Millisecond
+	if rep, err := Run(context.Background(), []Case{bad}, o); !errors.Is(err, ErrOnLoad) || rep != nil {
+		t.Errorf("gate closed on every row: %v, %v", rep, err)
+	}
+	o.Load = fakeLoad(1, 9, 1, 9, 1, 9)
+	if rep, err := Run(context.Background(), []Case{bad}, o); !errors.Is(err, ErrOnLoad) || rep != nil || !strings.Contains(err.Error(), "more than 2 times") {
+		t.Errorf("every row capped: %v, %v", rep, err)
+	}
+}
+
+// A gate that stays closed (refuse policy) after the first row: that row stays,
+// the rest are deferred, no error.
+func TestRunClosedGateKeepsMeasuredRows(t *testing.T) {
+	a, b, c := goodCase("a"), goodCase("b"), goodCase("c")
+	a.Ref, b.Ref, c.Ref = fixedRef(time.Millisecond), fixedRef(time.Millisecond), fixedRef(time.Millisecond)
+	o := fixedOpts()
+	o.Rounds, o.OnLoad = 1, OnLoadRefuse
+	o.Load = fakeLoad(1, 1, 99) // a: gate 1, after 1; b: gate 99; c: not tried
+	rep, err := Run(context.Background(), []Case{a, b, c}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Rows[0].Valid || rep.Rows[1].Valid || rep.Rows[2].Valid || len(rep.Rows[2].Rounds) != 0 || len(rep.Deferred) != 2 || rep.Deferred[1] != "c" {
+		t.Errorf("rows = %+v deferred %v", rep.Rows, rep.Deferred)
+	}
+	// Only restricts the run.
+	o.Load, o.Only = fakeLoad(1), map[string]bool{"b": true}
+	rep, err = Run(context.Background(), []Case{a, b}, o)
+	if err != nil || len(rep.Rows) != 1 || rep.Rows[0].Name != "b" {
+		t.Errorf("only: %v %v", rep, err)
+	}
+}
+
+func TestResumeMergesDeferredRows(t *testing.T) {
+	a, b := goodCase("a"), goodCase("b")
+	a.Ref, b.Ref = fixedRef(time.Millisecond), fixedRef(time.Millisecond)
+	cases := []Case{a, b}
+	o := fixedOpts()
+	o.Rounds, o.OnLoad = 1, OnLoadRefuse
+	o.Load = fakeLoad(1, 1, 99)
+	prev, err := Run(context.Background(), cases, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckResume(prev, o); err != nil {
+		t.Fatal(err)
+	}
+	todo := Pending(prev, cases)
+	if len(todo) != 1 || !todo["b"] {
+		t.Fatalf("pending = %v", todo)
+	}
+	aRounds := prev.Rows[0].Rounds[0]
+	o.Only, o.Load = todo, fakeLoad(1)
+	next, err := Run(context.Background(), cases, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Merge(prev, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Valid || len(m.Deferred) != 0 || len(m.Rows) != 2 || m.Rows[0].Rounds[0] != aRounds || len(m.Rows[1].Rounds) != 1 {
+		t.Fatalf("merged = %+v", m)
+	}
+	if len(Pending(m, cases)) != 0 {
+		t.Error("a complete report still has pending rows")
+	}
+	// Refusals name the field.
+	for name, mut := range map[string]func(*Options){
+		"commit": func(o *Options) { o.Commit = "other" },
+		"gate":   func(o *Options) { o.MaxLoad = 4 },
+		"ref":    func(o *Options) { o.RefVersions = map[string]string{"numpy": "9"} },
+	} {
+		oo := o
+		mut(&oo)
+		if err := CheckResume(prev, oo); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	g := *prev
+	g.Go = "go0.0"
+	if err := CheckResume(&g, o); err == nil || !strings.Contains(err.Error(), "go0.0") {
+		t.Errorf("go: %v", err)
+	}
+	if err := CheckResume(nil, o); err == nil {
+		t.Error("nil prev")
+	}
+	if err := CheckResume(&Report{Status: StatusDeferred}, o); err == nil {
+		t.Error("deferred prev")
+	}
+	// A row that is still deferred after the resume stays deferred, with the retries added;
+	// a row prev did not have is appended.
+	still := *next
+	still.Rows = []Row{{Name: "b", Func: "F", Retries: 2, Allocs: 7}, {Name: "c", Func: "F", Rounds: next.Rows[0].Rounds}}
+	m2, err := Merge(prev, &still)
+	if err != nil || len(m2.Rows) != 3 || m2.Rows[1].Valid || m2.Rows[1].Retries != 2 || m2.Rows[1].Allocs != 7 || m2.Rows[2].Name != "c" || len(m2.Deferred) != 1 {
+		t.Errorf("still deferred: %+v %v", m2, err)
+	}
+	other := *next
+	other.Commit = "zzz"
+	if _, err := Merge(prev, &other); err == nil {
+		t.Error("merge across commits")
+	}
+	if _, err := Merge(&Report{Status: StatusDeferred}, next); err == nil {
+		t.Error("merge of a deferred report")
+	}
+}
+
+func TestMergeAllocsKeepsTimings(t *testing.T) {
+	prev := sampleReport()
+	rec := &Report{Status: StatusDeferred, Rows: []Row{
+		{Name: "fast", Func: "G", Reference: "ref", Parity: ParityTolerance, Allocs: 5},
+		{Name: "new", Func: "H", Parity: ParityNone, Allocs: 1},
+	}}
+	m := MergeAllocs(prev, rec)
+	if m.Status != StatusMeasured || len(m.Rows) != 2 || m.Rows[0].Allocs != 5 || len(m.Rows[0].Rounds) != 1 ||
+		m.Rows[1].Name != "new" || m.Rows[1].Valid || len(m.Deferred) != 1 {
+		t.Errorf("merged = %+v", m)
+	}
+	if got := MergeAllocs(nil, rec); got != rec {
+		t.Error("no previous report: the recording is returned as is")
+	}
+	if got := MergeAllocs(&Report{Status: StatusDeferred}, rec); got != rec {
+		t.Error("deferred previous report: the recording is returned as is")
 	}
 }
 

@@ -98,7 +98,7 @@ func TestReadReportRejects(t *testing.T) {
 		"load":       mut(`"load_before": 3`, `"load_before": -3`),
 		"sample":     mut(`"go_ns": 110`, `"go_ns": -110`),
 		"zeroref":    mut(`"ref_ns": 11`, `"ref_ns": 0`),
-		"norounds":   `{"schema":1,"status":"measured","max_load":8,"rows":[{"name":"a","func":"F","parity":"none","allocs":0}]}`,
+		"retries":    mut(`"allocs": 2`, `"allocs": 2, "retries": -1`),
 		"deferredR":  mut(`"status": "measured"`, `"status": "deferred"`),
 		"loadafter":  mut(`"load_after": 4`, `"load_after": -4`),
 		"loadbefore": mut(`"load_before": 1,`, `"load_before": -1,`),
@@ -165,10 +165,26 @@ func TestTable(t *testing.T) {
 			t.Errorf("table lacks %q:\n%s", want, s)
 		}
 	}
-	r.Valid = false
+	r.Rows[0].Rounds[0].LoadAfter = 9
+	r.Rows[0].Retries = 2
 	s = string(Table(r))
-	if !strings.Contains(s, "**invalid**") || !strings.Contains(s, "| invalid |") {
-		t.Errorf("invalid run not marked:\n%s", s)
+	if !strings.Contains(s, "**partial: 1 of 2 rows valid**") || !strings.Contains(s, "| invalid |") || !strings.Contains(s, "Retries: 2") {
+		t.Errorf("partial run not marked:\n%s", s)
+	}
+	// A deferred row of a measured report (no rounds).
+	r = sampleReport()
+	r.Rows[0].Rounds = nil
+	s = string(Table(r))
+	if !strings.Contains(s, "**partial: 1 of 2 rows valid**") || !strings.Contains(s, "| — | — | — | deferred |") {
+		t.Errorf("deferred row not marked:\n%s", s)
+	}
+	var b bytes.Buffer
+	if err := r.Write(&b); err != nil {
+		t.Fatal(err)
+	}
+	back, err := ReadReport(&b)
+	if err != nil || len(back.Deferred) != 1 || back.Deferred[0] != "slow|row" || back.Valid {
+		t.Errorf("round trip of a partial report: %+v %v", back, err)
 	}
 	d := &Report{Status: StatusDeferred, Rows: []Row{{Name: "a", Func: "F", Parity: ParityNone, Allocs: 3}}}
 	s = string(Table(d))
@@ -191,9 +207,14 @@ func TestIssues(t *testing.T) {
 			t.Errorf("body lacks %q:\n%s", want, is[0].Body)
 		}
 	}
-	r.Valid = false
+	// A partial run drafts from its valid rows only.
+	r.Rows[0].Rounds = nil
+	if is, err := Issues(r); err != nil || len(is) != 0 {
+		t.Errorf("partial run: %v, %v", is, err)
+	}
+	r.Rows[1].Rounds[0].LoadBefore = 9
 	if _, err := Issues(r); !errors.Is(err, ErrInvalidRun) {
-		t.Errorf("invalid run: %v", err)
+		t.Errorf("no valid row: %v", err)
 	}
 	d := &Report{Status: StatusDeferred}
 	if _, err := Issues(d); !errors.Is(err, ErrInvalidRun) {
