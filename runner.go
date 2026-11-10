@@ -23,6 +23,9 @@ const (
 // DefaultMaxLoad is the design's gate: no timing at a 1-minute load of 8 or more.
 const DefaultMaxLoad = 8.0
 
+// DefaultMaxRetries is the per-row cap of rounds re-run after ending above the gate.
+const DefaultMaxRetries = 10
+
 // Options configures Run. The zero value is usable: 7 rounds, 100 ms samples,
 // gate 8, wait up to 30 minutes.
 type Options struct {
@@ -32,6 +35,11 @@ type Options struct {
 	OnLoad      string
 	LoadTimeout time.Duration
 	Poll        time.Duration
+	// MaxRetries caps, per row, the rounds that may end above the gate and be
+	// re-run; one more and the row is deferred (0 means DefaultMaxRetries).
+	MaxRetries int
+	// Only, when not nil, restricts the run to the named cases (a resume).
+	Only map[string]bool
 	// Load reads the 1-minute load; nil reads the host's (loadavg.Avg1).
 	Load func() (float64, error)
 	// Now is the clock for the report's date; nil is time.Now.
@@ -58,6 +66,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.LoadTimeout <= 0 {
 		o.LoadTimeout = 30 * time.Minute
+	}
+	if o.MaxRetries <= 0 {
+		o.MaxRetries = DefaultMaxRetries
 	}
 	if o.Poll <= 0 {
 		o.Poll = 10 * time.Second
@@ -148,7 +159,15 @@ func goTimer(c Case) Timer {
 // the two sides (Go first on even rounds, reference first on odd ones); the load
 // is read, gated and stored before every round and read again after it. A
 // reference error stops the run: a series with a hole is biased, not smaller.
-// A gate that does not open stops it too, with ErrOnLoad: no verdict.
+//
+// A round that ends above the gate is discarded and re-run (the next gate
+// check waits, within LoadTimeout, until the load is back under the gate; the
+// round keeps its position in the alternation), at most MaxRetries times per
+// row; past the cap the row is deferred, alone. A gate that does not open stops
+// the run: the rows measured so far are valid, the current and the remaining
+// rows are deferred. A run that measured no row at all returns ErrOnLoad and
+// no report. Rows are valid on their own (see Row.Valid); Report.Deferred
+// names the others, and Merge combines a later run of those with this one.
 func Run(ctx context.Context, cases []Case, opt Options) (*Report, error) {
 	if err := Validate(cases); err != nil {
 		return nil, err
@@ -161,21 +180,38 @@ func Run(ctx context.Context, cases []Case, opt Options) (*Report, error) {
 	opt = opt.withDefaults()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	rep := opt.header(StatusMeasured)
+	var closed error // the gate error that stopped the run, if any
 	for _, c := range cases {
-		row, err := runCase(ctx, c, opt)
-		if err != nil {
-			return nil, fmt.Errorf("case %q: %w", c.Name, err)
+		if opt.Only != nil && !opt.Only[c.Name] {
+			continue
 		}
-		for _, rd := range row.Rounds {
-			if rd.LoadAfter >= opt.MaxLoad {
-				rep.Valid = false
-			}
+		if closed != nil {
+			rep.Rows = append(rep.Rows, c.row(AllocsPerCall(c)))
+			continue
+		}
+		row, err := runCase(ctx, c, opt)
+		switch {
+		case errors.Is(err, errRetryCap):
+			row.Rounds = nil
+		case errors.Is(err, ErrOnLoad):
+			row.Rounds, closed = nil, err
+		case err != nil:
+			return nil, fmt.Errorf("case %q: %w", c.Name, err)
 		}
 		rep.Rows = append(rep.Rows, row)
 	}
 	rep.Finish()
+	if rep.ValidRows() == 0 && len(rep.Rows) > 0 {
+		if closed == nil {
+			closed = fmt.Errorf("%w: every row ended above the gate more than %d times", ErrOnLoad, opt.MaxRetries)
+		}
+		return nil, closed
+	}
 	return rep, nil
 }
+
+// errRetryCap marks a row whose rounds kept ending above the gate.
+var errRetryCap = errors.New("rounds kept ending above the load gate")
 
 func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 	row := c.row(AllocsPerCall(c))
@@ -187,7 +223,7 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 	if row.RefIters, err = Calibrate(f, opt.MinTime); err != nil {
 		return row, err
 	}
-	for r := 0; r < opt.Rounds; r++ {
+	for r := 0; r < opt.Rounds; {
 		load, err := opt.gate(ctx)
 		if err != nil {
 			return row, err
@@ -211,7 +247,17 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 		if rd.LoadAfter, err = opt.Load(); err != nil {
 			return row, fmt.Errorf("cannot read the load average: %w", err)
 		}
+		if rd.LoadAfter >= opt.MaxLoad {
+			// Discarded; the same round (same side order) is run again once the
+			// gate is open.
+			row.Retries++
+			if row.Retries > opt.MaxRetries {
+				return row, errRetryCap
+			}
+			continue
+		}
 		row.Rounds = append(row.Rounds, rd)
+		r++
 	}
 	return row, nil
 }

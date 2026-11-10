@@ -42,8 +42,14 @@ type Row struct {
 	GoIters   int     `json:"go_iters,omitempty"`
 	RefIters  int     `json:"ref_iters,omitempty"`
 	Rounds    []Round `json:"rounds,omitempty"`
+	// Retries counts the rounds of this row that ended above the load gate and
+	// were discarded and re-run (across every run that measured the row).
+	Retries int `json:"retries,omitempty"`
 
 	// Derived from Rounds by Finish; never trusted from a file.
+	// Valid: the row has rounds and every one started and ended under the gate.
+	// A row without rounds in a measured report is deferred.
+	Valid   bool    `json:"valid"`
 	Go      Summary `json:"go"`
 	Ref     Summary `json:"ref"`
 	Ratio   float64 `json:"ratio"`
@@ -70,15 +76,47 @@ type Report struct {
 	RefVersions map[string]string `json:"ref_versions,omitempty"`
 	MaxLoad     float64           `json:"max_load"`
 	Load        LoadStats         `json:"load"`
-	// Valid is true when every round, before and after, was at or below MaxLoad.
-	Valid bool  `json:"valid"`
-	Rows  []Row `json:"rows"`
+	// Valid is derived: in a measured report, true when no row is deferred and
+	// every row is valid (the run is complete). Always true for a deferred report.
+	Valid bool `json:"valid"`
+	// Retries is the total of the rows' Retries (derived).
+	Retries int `json:"retries,omitempty"`
+	// Deferred names the rows of a measured report that are not valid yet
+	// (derived): a later run with -perf.resume measures only those.
+	Deferred []string `json:"deferred,omitempty"`
+	Rows     []Row    `json:"rows"`
 }
 
-// Finish recomputes every derived field (summaries, ratio, verdict, load
-// statistics) from the rounds.
+// RowValid reports whether a row has rounds and all of them started and ended
+// under the gate (a load strictly below max).
+func RowValid(row Row, max float64) bool {
+	if len(row.Rounds) == 0 {
+		return false
+	}
+	for _, rd := range row.Rounds {
+		if rd.LoadBefore >= max || rd.LoadAfter >= max {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidRows counts the valid rows of a report.
+func (r *Report) ValidRows() int {
+	n := 0
+	for _, row := range r.Rows {
+		if RowValid(row, r.MaxLoad) {
+			n++
+		}
+	}
+	return n
+}
+
+// Finish recomputes every derived field (row validity, summaries, ratio,
+// verdict, load statistics, the deferred list) from the rounds.
 func (r *Report) Finish() {
 	var loads []float64
+	r.Deferred, r.Retries = nil, 0
 	for i := range r.Rows {
 		row := &r.Rows[i]
 		var g, f []float64
@@ -87,6 +125,11 @@ func (r *Report) Finish() {
 			f = append(f, rd.RefNs)
 			loads = append(loads, rd.LoadBefore, rd.LoadAfter)
 		}
+		r.Retries += row.Retries
+		row.Valid = RowValid(*row, r.MaxLoad)
+		if r.Status == StatusMeasured && !row.Valid {
+			r.Deferred = append(r.Deferred, row.Name)
+		}
 		row.Go, row.Ref, row.Ratio, row.Verdict = Summary{}, Summary{}, 0, ""
 		if len(g) == 0 {
 			continue
@@ -94,6 +137,11 @@ func (r *Report) Finish() {
 		row.Go, row.Ref = Summarize(g), Summarize(f)
 		row.Ratio = row.Go.Median / row.Ref.Median
 		row.Verdict = Judge(row.Go, row.Ref)
+	}
+	if r.Status == StatusMeasured {
+		r.Valid = len(r.Deferred) == 0
+	} else {
+		r.Valid = true
 	}
 	r.Load = LoadStats{}
 	if len(loads) > 0 {
@@ -169,8 +217,8 @@ func checkRow(row Row, status string) error {
 		return errors.New("allocs is not a finite non-negative number")
 	case status == StatusDeferred && len(row.Rounds) > 0:
 		return errors.New("a deferred report has no rounds")
-	case status == StatusMeasured && len(row.Rounds) == 0:
-		return errors.New("a measured report needs rounds")
+	case row.Retries < 0:
+		return errors.New("retries is negative")
 	}
 	for _, rd := range row.Rounds {
 		if !finiteNonNeg(rd.LoadBefore) || !finiteNonNeg(rd.LoadAfter) {
