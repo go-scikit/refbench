@@ -206,3 +206,83 @@ func TestRecordRefusesOtherCommit(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestGoModAccepted(t *testing.T) {
+	const hdr = "diff --git a/bench/go.mod b/bench/go.mod\nindex 1..2 100644\n--- a/bench/go.mod\n+++ b/bench/go.mod\n@@ -1,9 +1,9 @@\n\\ No newline\n\n"
+	const lib = "example.com/lib"
+	block := func(req, rep string) string {
+		return hdr + " module example.com/lib/bench\n\n require (\n" + req + " )\n\n" + rep
+	}
+	cases := []struct {
+		name string
+		diff string
+		want bool
+	}{
+		{"require of another module bumped", block("-\texample.com/o v1\n+\texample.com/o v2 // indirect\n", " replace example.com/lib => ../\n"), true},
+		{"single-line require of another module", hdr + "-require example.com/o v1\n+require example.com/o v2\n replace example.com/lib => ../\n", true},
+		{"replace block kept", hdr + "-require example.com/o v1\n+require example.com/o v2\n replace (\n \texample.com/lib => ../\n )\n", true},
+		{"library require pinned", block("-\texample.com/lib v0\n+\texample.com/lib v1\n", " replace example.com/lib => ../\n"), false},
+		{"single-line library require", hdr + "-require example.com/lib v0\n+require example.com/lib v1\n replace example.com/lib => ../\n", false},
+		{"replace changed", block("+\texample.com/o v2\n", "-replace example.com/lib => ../\n+replace example.com/lib => ../x\n"), false},
+		{"replace in a block changed", hdr + "+require example.com/o v2\n replace (\n-\texample.com/lib => ../\n+\texample.com/lib => ../x\n )\n", false},
+		{"replace missing", hdr + "+require example.com/o v2\n", false},
+		{"nothing changed", hdr + " replace example.com/lib => ../\n", false},
+		{"go directive changed", hdr + "-go 1.26\n+go 1.27\n+require example.com/o v2\n replace example.com/lib => ../\n", false},
+		{"block opener changed", hdr + "+require (\n replace example.com/lib => ../\n", false},
+		{"block closer changed", hdr + " require (\n+)\n replace example.com/lib => ../\n", false},
+		{"new file", "new file mode 100644\n+module x\n", false},
+	}
+	for _, c := range cases {
+		if got := goModAccepted(c.diff, lib); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestResolveCommitHashChoice(t *testing.T) {
+	root := t.TempDir()
+	put(t, root, "go.mod", "module example.com/lib\n")
+	old := gitLookup
+	t.Cleanup(func() { gitLookup = old })
+	const diff = "--- a\n+++ b\n+require example.com/o v2\n replace example.com/lib => ../\n"
+	st := gitState{Head: fakeHead, Dirty: []string{"lib.go", "bench/go.mod"}, GoModDiff: diff, HashAll: "aaaaaaaa11", HashLib: "bbbbbbbb22"}
+	gitLookup = func(string) (gitState, error) { return st, nil }
+	if got, err := resolveCommit(root, ""); err != nil || got != fakeHead+"-dirty-bbbbbbbb" {
+		t.Fatalf("accepted harness: %q, %v", got, err)
+	}
+	st.GoModDiff = "+go 1.2\n"
+	if got, err := resolveCommit(root, ""); err != nil || got != fakeHead+"-dirty-aaaaaaaa" {
+		t.Fatalf("refused harness: %q, %v", got, err)
+	}
+	if err := os.Remove(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatal(err)
+	}
+	st.GoModDiff = diff
+	if got, err := resolveCommit(root, ""); err != nil || got != fakeHead+"-dirty-aaaaaaaa" {
+		t.Fatalf("unreadable root go.mod must not exempt the harness: %q, %v", got, err)
+	}
+	if underRoot("sub/", "other/x") != "other/x" || underRoot("sub/", "sub/x") != "x" || underRoot("", "x") != "x" {
+		t.Fatal("underRoot")
+	}
+	st.Dirty = []string{"bench/go.mod"}
+	if _, err := resolveCommit(root, fakeHead); err == nil || !strings.Contains(err.Error(), "bench/go.mod") {
+		t.Fatalf("flag with an unreadable root go.mod: %v", err)
+	}
+}
+
+func TestLookupOutsideGit(t *testing.T) {
+	needGit(t)
+	if _, err := realGitLookup(t.TempDir()); err == nil {
+		t.Skip("temporary directory is inside a git repository")
+	}
+}
+
+func TestUntrackedHarnessFiles(t *testing.T) {
+	_, root, head := repoAt(t, "")
+	git(t, root, "rm", "-q", "--cached", "bench/go.sum")
+	git(t, root, "commit", "-q", "-m", "untrack")
+	head = strings.TrimSpace(git(t, root, "rev-parse", "HEAD"))
+	if _, err := resolveCommit(root, head); err == nil || !strings.Contains(err.Error(), "bench/go.sum") {
+		t.Fatalf("untracked go.sum: %v", err)
+	}
+}

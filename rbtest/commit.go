@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -34,22 +35,22 @@ type gitState struct {
 var gitLookup = realGitLookup
 
 func realGitLookup(root string) (gitState, error) {
-	head, err := gitOut(root, "rev-parse", "HEAD")
+	diff := []string{"diff", "HEAD", "--binary", "--ignore-submodules=none", "--", "."}
+	outs, err := gitAll(root, [][]string{
+		{"rev-parse", "HEAD"},
+		{"rev-parse", "--show-prefix"},
+		{"-c", "status.showUntrackedFiles=all", "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=none"},
+		{"diff", "HEAD", "-U1000000", "--", harnessMod},
+		diff,
+		append(slices.Clone(diff), ":(exclude)"+harnessMod, ":(exclude)"+harnessSum),
+	})
 	if err != nil {
 		return gitState{}, err
 	}
-	prefix, err := gitOut(root, "rev-parse", "--show-prefix")
-	if err != nil {
-		return gitState{}, err
-	}
-	prefix = strings.TrimSpace(prefix)
-	status, err := gitOut(root, "-c", "status.showUntrackedFiles=all", "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=none")
-	if err != nil {
-		return gitState{}, err
-	}
-	st := gitState{Head: strings.TrimSpace(head)}
+	prefix := strings.TrimSpace(outs[1])
+	st := gitState{Head: strings.TrimSpace(outs[0]), GoModDiff: outs[3]}
 	var untracked []string
-	entries := strings.Split(status, "\x00")
+	entries := strings.Split(outs[2], "\x00")
 	for i := 0; i < len(entries); i++ {
 		e := entries[i]
 		if len(e) < 4 {
@@ -58,60 +59,54 @@ func realGitLookup(root string) (gitState, error) {
 		xy, p := e[:2], e[3:]
 		st.Dirty = append(st.Dirty, underRoot(prefix, p))
 		if xy == "??" {
-			untracked = append(untracked, p)
+			untracked = append(untracked, underRoot(prefix, p))
 		}
-		if (xy[0] == 'R' || xy[0] == 'C' || xy[1] == 'R' || xy[1] == 'C') && i+1 < len(entries) {
+		if strings.ContainsAny(xy, "RC") && i+1 < len(entries) {
 			i++
 			st.Dirty = append(st.Dirty, underRoot(prefix, entries[i]))
 		}
 	}
-	if len(st.Dirty) == 0 {
-		return st, nil
-	}
-	if st.GoModDiff, err = gitOut(root, "diff", "HEAD", "-U1000000", "--", harnessMod); err != nil {
-		return gitState{}, err
-	}
-	hash := func(exclude bool) (string, error) {
-		args := []string{"diff", "HEAD", "--binary", "--ignore-submodules=none", "--", "."}
-		if exclude {
-			args = append(args, ":(exclude)"+harnessMod, ":(exclude)"+harnessSum)
-		}
-		d, err := gitOut(root, args...)
-		if err != nil {
-			return "", err
-		}
-		h := sha256.New()
-		h.Write([]byte(d))
-		for _, u := range untracked {
-			rel := underRoot(prefix, u)
-			if exclude && (rel == harnessMod || rel == harnessSum) {
-				continue
-			}
-			b, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-			fmt.Fprintf(h, "\x00%s\x00", rel)
-			h.Write(b)
-		}
-		return hex.EncodeToString(h.Sum(nil)), nil
-	}
-	if st.HashAll, err = hash(false); err != nil {
-		return gitState{}, err
-	}
-	if st.HashLib, err = hash(true); err != nil {
-		return gitState{}, err
-	}
+	st.HashAll = digest(root, outs[4], untracked, false)
+	st.HashLib = digest(root, outs[5], untracked, true)
 	return st, nil
+}
+
+// digest hashes a tracked diff and the content of the untracked files.
+func digest(root, diff string, untracked []string, skipHarness bool) string {
+	h := sha256.New()
+	h.Write([]byte(diff))
+	for _, rel := range untracked {
+		if skipHarness && (rel == harnessMod || rel == harnessSum) {
+			continue
+		}
+		b, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		fmt.Fprintf(h, "\x00%s\x00", rel)
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // underRoot maps a path relative to the repository's top to one relative to
 // the module root (prefix is `git rev-parse --show-prefix`, "" or "sub/");
 // a path outside the root is kept as git reports it.
 func underRoot(prefix, p string) string {
-	if prefix != "" {
-		if rest, ok := strings.CutPrefix(p, prefix); ok {
-			return rest
-		}
+	if rest, ok := strings.CutPrefix(p, prefix); ok {
+		return rest
 	}
 	return p
+}
+
+// gitAll runs each git command in turn and returns the outputs.
+func gitAll(root string, cmds [][]string) ([]string, error) {
+	outs := make([]string, 0, len(cmds))
+	for _, args := range cmds {
+		out, err := gitOut(root, args...)
+		if err != nil {
+			return nil, err
+		}
+		outs = append(outs, out)
+	}
+	return outs, nil
 }
 
 func gitOut(root string, args ...string) (string, error) {
@@ -146,19 +141,18 @@ func goModAccepted(diff, lib string) bool {
 			strings.HasPrefix(line, "\\") {
 			continue
 		}
-		mark, body := line[0], line[1:]
-		if i := strings.Index(body, "//"); i >= 0 {
-			body = body[:i]
+		mark := line[:1]
+		if !strings.Contains(" +-", mark) {
+			return false // new file, deleted file, rename...
 		}
+		body, _, _ := strings.Cut(line[1:], "//")
 		f := strings.Fields(body)
 		if len(f) == 0 {
 			continue
 		}
-		if mark != ' ' && mark != '+' && mark != '-' {
-			return false
-		}
-		isChange := mark != ' '
+		isChange := mark != " "
 		changed = changed || isChange
+		isLibReplace := (f[0] == "replace" && len(f) > 1 && f[1] == lib || state == "replace" && f[0] == lib) && slices.Contains(f, "=>")
 		switch {
 		case len(f) == 2 && f[1] == "(":
 			state = f[0]
@@ -170,24 +164,13 @@ func goModAccepted(diff, lib string) bool {
 			if isChange {
 				return false
 			}
-		case f[0] == "require" && len(f) >= 3:
-			if isChange && f[1] == lib {
-				return false
-			}
-		case state == "require":
-			if isChange && f[0] == lib {
-				return false
-			}
-		case f[0] == "replace" && len(f) >= 3 && f[1] == lib && hasArrow(f):
+		case isLibReplace:
 			if isChange {
 				return false
 			}
 			replaced = true
-		case state == "replace" && f[0] == lib && hasArrow(f):
-			if isChange {
-				return false
-			}
-			replaced = true
+		case f[0] == "require" && len(f) > 2 && f[1] != lib, state == "require" && f[0] != lib:
+			// a require of another module: a change is accepted
 		default:
 			if isChange {
 				return false
@@ -195,15 +178,6 @@ func goModAccepted(diff, lib string) bool {
 		}
 	}
 	return changed && replaced
-}
-
-func hasArrow(f []string) bool {
-	for _, s := range f {
-		if s == "=>" {
-			return true
-		}
-	}
-	return false
 }
 
 // resolveCommit returns the commit to record. With flag set, it must equal
@@ -223,12 +197,8 @@ func resolveCommit(root, flag string) (string, error) {
 	if flag != "" && flag != st.Head {
 		return "", fmt.Errorf("-perf.commit is %q, but HEAD of %s is %q: give the full 40-character SHA of the tree measured (git rev-parse HEAD), or omit the flag", flag, root, st.Head)
 	}
-	if len(st.Dirty) == 0 {
-		return st.Head, nil
-	}
-	harnessOK := false
 	var dirty []string
-	var goModDirty, sumDirty bool
+	goModDirty, sumDirty, harnessOK := false, false, false
 	for _, p := range st.Dirty {
 		switch s := filepath.ToSlash(p); {
 		case s == harnessMod:
@@ -241,32 +211,22 @@ func resolveCommit(root, flag string) (string, error) {
 	}
 	if goModDirty {
 		lib, err := modulePath(filepath.Join(root, "go.mod"))
-		harnessOK = err == nil && goModAccepted(st.GoModDiff, lib)
+		if harnessOK = err == nil && goModAccepted(st.GoModDiff, lib); !harnessOK {
+			dirty = append(dirty, harnessMod+" (more than requires of other modules changed, or the replace of the library moved)")
+		}
 	}
-	switch {
-	case goModDirty && !harnessOK:
-		dirty = append(dirty, harnessMod+" (more than requires of other modules changed, or the replace of the library moved)")
-	case sumDirty && !goModDirty:
+	if sumDirty && !goModDirty {
 		dirty = append(dirty, harnessSum+" (without an accepted "+harnessMod+")")
 	}
-	if len(dirty) == 0 && !goModDirty && !sumDirty {
+	if len(dirty) == 0 {
 		return st.Head, nil
 	}
 	if flag != "" {
-		if len(dirty) == 0 {
-			return flag, nil
-		}
 		return "", fmt.Errorf("-perf.commit %q given but the tree at %s is dirty, so a table would claim a commit it did not measure; dirty paths: %s", flag, root, strings.Join(dirty, ", "))
-	}
-	if len(dirty) == 0 {
-		return st.Head, nil // only an accepted harness change
 	}
 	h := st.HashAll
 	if harnessOK {
 		h = st.HashLib
 	}
-	if len(h) > 8 {
-		h = h[:8]
-	}
-	return st.Head + "-dirty-" + h, nil
+	return st.Head + "-dirty-" + h[:8], nil
 }
