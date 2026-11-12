@@ -138,6 +138,11 @@ deferred row). Without `-perf.run` nothing is timed and the test passes
 quietly. Other flags: `-perf.rounds`, `-perf.mintime`, `-perf.maxload`,
 `-perf.commit`, `-perf.machine`.
 
+| flag | meaning |
+|---|---|
+| `-perf.commit <sha>` | optional; must equal the full 40-character `git rev-parse HEAD` of `<root>`, and the tree must be clean (a dirty `bench/go.mod` or `bench/go.sum` alone is allowed). Anything else refuses, naming both values or the dirty paths. Without git the flag refuses. |
+| (flag omitted) | the commit is filled in from HEAD, suffixed `-dirty` when the tree is; with no git it stays empty |
+
 Nothing is written unless `<root>/go.mod` (the repository's `..` from a `bench/`
 module) declares the parent of the running binary's module path, or the module
 itself: a binary of one repository run from another's `bench/` directory refuses,

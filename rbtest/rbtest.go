@@ -55,7 +55,7 @@ var (
 	maxLoadFlag = flag.Float64("perf.maxload", refbench.DefaultMaxLoad, "the 1-minute load gate")
 	onLoadFlag  = flag.String("perf.onload", refbench.OnLoadRefuse, "wait or refuse when the load is at or above the gate")
 	waitFlag    = flag.Duration("perf.wait", 30*time.Minute, "how long to wait for the gate with -perf.onload=wait")
-	commitFlag  = flag.String("perf.commit", "", "commit recorded in the report")
+	commitFlag  = flag.String("perf.commit", "", "commit recorded in the report: must equal the 40-character HEAD of a clean tree (default: HEAD, marked -dirty when the tree is)")
 	machineFlag = flag.String("perf.machine", "", "machine description recorded in the report (default: GOOS/GOARCH, CPUs)")
 )
 
@@ -156,6 +156,11 @@ func perf(t T, cfg refbench.CIConfig, opt refbench.Options) {
 		if err := checkRoot(cfg); err != nil {
 			t.Fatalf("%v", err)
 		}
+		c, err := resolveCommit(cfg.Root, *commitFlag)
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		opt.Commit = c
 	}
 	switch {
 	case *runFlag:
