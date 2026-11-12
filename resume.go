@@ -105,6 +105,7 @@ func MergeAllocs(prev, rec *Report) *Report {
 		old[r.Name] = r
 	}
 	out := *prev
+	out.Commit = rec.Commit // the allocation counts are those of this commit
 	out.Rows = make([]Row, 0, len(rec.Rows))
 	for _, r := range rec.Rows {
 		if o, ok := old[r.Name]; ok {
