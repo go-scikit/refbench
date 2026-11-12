@@ -213,6 +213,9 @@ func perf(t T, cfg refbench.CIConfig, opt refbench.Options) {
 		if err != nil {
 			t.Fatalf("%v", err)
 		}
+		if prev != nil && prev.Status == refbench.StatusMeasured && prev.Commit != opt.Commit {
+			t.Fatalf("-perf.record: perf.json was measured at commit %q, this run is at %q: recording allocation counts onto it would mix commits (run -perf.run again)", prev.Commit, opt.Commit)
+		}
 		write(t, cfg, refbench.MergeAllocs(prev, rep))
 	default:
 		if err := refbench.RunCI(cfg); err != nil {

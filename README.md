@@ -140,8 +140,8 @@ quietly. Other flags: `-perf.rounds`, `-perf.mintime`, `-perf.maxload`,
 
 | flag | meaning |
 |---|---|
-| `-perf.commit <sha>` | optional; must equal the full 40-character `git rev-parse HEAD` of `<root>`, and the tree must be clean (a dirty `bench/go.mod` or `bench/go.sum` alone is allowed). Anything else refuses, naming both values or the dirty paths. Without git the flag refuses. |
-| (flag omitted) | the commit is filled in from HEAD, suffixed `-dirty` when the tree is; with no git it stays empty |
+| `-perf.commit <sha>` | optional; must equal the full 40-character `git rev-parse HEAD` of `<root>`, and the tree must be clean (`bench/go.mod` may differ only in `require` lines of other modules, with the library's `replace` unchanged; `bench/go.sum` only alongside it). Anything else refuses, naming both values or the dirty paths. Without git the flag refuses. |
+| (flag omitted) | the commit is filled in from HEAD, suffixed `-dirty-<8 hex digest of the changes>` when the tree is, so `-perf.resume` and `-perf.record` refuse another tree; with no git it stays empty |
 
 Nothing is written unless `<root>/go.mod` (the repository's `..` from a `bench/`
 module) declares the parent of the running binary's module path, or the module
