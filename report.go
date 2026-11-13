@@ -30,6 +30,11 @@ type Round struct {
 	// GoNs and RefNs are nanoseconds per call.
 	GoNs  float64 `json:"go_ns"`
 	RefNs float64 `json:"ref_ns"`
+	// RefsNs is the nanoseconds per call of every extra reference, by ID, and
+	// Order the sides in the order they ran this round (SideGo, SidePrimary and
+	// the IDs). Schema 2 only.
+	RefsNs map[string]float64 `json:"refs_ns,omitempty"`
+	Order  []string           `json:"order,omitempty"`
 }
 
 // Row is one case's result.
@@ -45,6 +50,22 @@ type Row struct {
 	// Retries counts the rounds of this row that ended above the load gate and
 	// were discarded and re-run (across every run that measured the row).
 	Retries int `json:"retries,omitempty"`
+	// Refs are the extra references (schema 2): identity from the registry,
+	// the rest derived. GoAccuracy and PrimaryAccuracy are the accuracy of Go
+	// and of the primary reference on the case's points, GoBudget Go's stated
+	// bound in ulp. They are measured once, ungated, before the rounds.
+	Refs            []RefRow   `json:"refs,omitempty"`
+	GoAccuracy      *AccResult `json:"go_accuracy,omitempty"`
+	PrimaryAccuracy *AccResult `json:"primary_accuracy,omitempty"`
+	GoBudget        float64    `json:"go_budget,omitempty"`
+
+	// Best is the fastest side by median (SidePrimary or a reference ID), and
+	// BestRatio, BestVerdict and BestLabel Go against it: the row's headline
+	// (derived; empty without Refs).
+	Best        string  `json:"best,omitempty"`
+	BestRatio   float64 `json:"best_ratio,omitempty"`
+	BestVerdict string  `json:"best_verdict,omitempty"`
+	BestLabel   string  `json:"best_label,omitempty"`
 
 	// Derived from Rounds by Finish; never trusted from a file.
 	// Valid: the row has rounds and every one started and ended under the gate.
@@ -138,6 +159,18 @@ func (r *Report) Finish() {
 		row.Ratio = row.Go.Median / row.Ref.Median
 		row.Verdict = Judge(row.Go, row.Ref)
 	}
+	for i := range r.Rows {
+		// After the loop: finishRefs reads the row's Go and primary summaries,
+		// also when the row has no rounds (it then clears the derived fields).
+		finishRefs(&r.Rows[i])
+	}
+	if r.Schema == SchemaVersion || r.Schema == SchemaMultiRef {
+		// The schema is what the content needs: 2 with extra references, else 1.
+		r.Schema = SchemaVersion
+		if r.usesRefs() {
+			r.Schema = SchemaMultiRef
+		}
+	}
 	if r.Status == StatusMeasured {
 		r.Valid = len(r.Deferred) == 0
 	} else {
@@ -184,8 +217,8 @@ func ReadReport(rd io.Reader) (*Report, error) {
 	if dec.More() {
 		return nil, errors.New("perf.json: trailing data after the object")
 	}
-	if r.Schema != SchemaVersion {
-		return nil, fmt.Errorf("perf.json: schema %d, this build reads %d", r.Schema, SchemaVersion)
+	if r.Schema != SchemaVersion && r.Schema != SchemaMultiRef {
+		return nil, fmt.Errorf("perf.json: schema %d, this build reads %d and %d", r.Schema, SchemaVersion, SchemaMultiRef)
 	}
 	if r.Status != StatusMeasured && r.Status != StatusDeferred {
 		return nil, fmt.Errorf("perf.json: unknown status %q", r.Status)
@@ -195,7 +228,7 @@ func ReadReport(rd io.Reader) (*Report, error) {
 	}
 	seen := map[string]bool{}
 	for i, row := range r.Rows {
-		if err := checkRow(row, r.Status); err != nil {
+		if err := checkRow(row, r.Status, r.Schema); err != nil {
 			return nil, fmt.Errorf("perf.json: row %d: %w", i, err)
 		}
 		if seen[row.Name] {
@@ -209,7 +242,10 @@ func ReadReport(rd io.Reader) (*Report, error) {
 
 func finiteNonNeg(x float64) bool { return !math.IsNaN(x) && !math.IsInf(x, 0) && x >= 0 }
 
-func checkRow(row Row, status string) error {
+func checkRow(row Row, status string, schema int) error {
+	if err := checkMultiRef(row, schema); err != nil {
+		return err
+	}
 	switch {
 	case row.Name == "" || row.Func == "":
 		return errors.New("name and func are required")
@@ -221,6 +257,9 @@ func checkRow(row Row, status string) error {
 		return errors.New("retries is negative")
 	}
 	for _, rd := range row.Rounds {
+		if err := checkRoundRefs(rd, row); err != nil {
+			return err
+		}
 		if !finiteNonNeg(rd.LoadBefore) || !finiteNonNeg(rd.LoadAfter) {
 			return errors.New("a round's load is not a finite non-negative number")
 		}

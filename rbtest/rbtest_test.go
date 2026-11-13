@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -334,7 +335,7 @@ func TestPartialThenResume(t *testing.T) {
 		t.Fatalf("resumed = %+v", done)
 	}
 	for i, rd := range done.Rows[0].Rounds {
-		if rd != rep.Rows[0].Rounds[i] {
+		if !reflect.DeepEqual(rd, rep.Rows[0].Rounds[i]) {
 			t.Errorf("row a round %d changed: %+v -> %+v", i, rep.Rows[0].Rounds[i], rd)
 		}
 	}

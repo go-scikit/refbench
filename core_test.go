@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -294,7 +295,7 @@ func TestResumeMergesDeferredRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !m.Valid || len(m.Deferred) != 0 || len(m.Rows) != 2 || m.Rows[0].Rounds[0] != aRounds || len(m.Rows[1].Rounds) != 1 {
+	if !m.Valid || len(m.Deferred) != 0 || len(m.Rows) != 2 || !reflect.DeepEqual(m.Rows[0].Rounds[0], aRounds) || len(m.Rows[1].Rounds) != 1 {
 		t.Fatalf("merged = %+v", m)
 	}
 	if len(Pending(m, cases)) != 0 {

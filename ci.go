@@ -287,6 +287,9 @@ func RunCI(cfg CIConfig) error {
 	for _, p := range CheckAllocs(rep, cfg.Cases) {
 		errs = append(errs, errors.New("allocations: "+p))
 	}
+	for _, p := range CheckRefs(rep, cfg.Cases) {
+		errs = append(errs, errors.New("references: "+p))
+	}
 	got, err := os.ReadFile(cfg.Table)
 	if err != nil {
 		return err

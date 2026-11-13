@@ -127,7 +127,7 @@ func AllocsPerCall(c Case) float64 {
 }
 
 func (c Case) row(allocs float64) Row {
-	return Row{Name: c.Name, Func: c.Func, Reference: c.Reference, Parity: c.Parity, Allocs: allocs}
+	return Row{Name: c.Name, Func: c.Func, Reference: c.Reference, Parity: c.Parity, Allocs: allocs, Refs: c.refRows()}
 }
 
 // RecordAllocs returns a deferred report: the allocation counts of every case
@@ -156,7 +156,9 @@ func goTimer(c Case) Timer {
 
 // Run measures every case. The Go side runs under GOMAXPROCS=1, set before and
 // restored after, never inside a timed interval. Rounds alternate the order of
-// the two sides (Go first on even rounds, reference first on odd ones); the load
+// the two sides (Go first on even rounds, reference first on odd ones); with
+// extra references (Case.Refs) the sides are rotated instead, and Rounds is
+// rounded up to a multiple of the number of sides; the load
 // is read, gated and stored before every round and read again after it. A
 // reference error stops the run: a series with a hole is biased, not smaller.
 //
@@ -175,6 +177,11 @@ func Run(ctx context.Context, cases []Case, opt Options) (*Report, error) {
 	for _, c := range cases {
 		if c.Ref == nil {
 			return nil, fmt.Errorf("case %q has no reference timer", c.Name)
+		}
+		for _, r := range c.Refs {
+			if r.Timer == nil {
+				return nil, fmt.Errorf("case %q: reference %s has no timer", c.Name, r.ID)
+			}
 		}
 	}
 	opt = opt.withDefaults()
@@ -215,6 +222,9 @@ var errRetryCap = errors.New("rounds kept ending above the load gate")
 
 func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 	row := c.row(AllocsPerCall(c))
+	if err := scoreAccuracy(c, &row); err != nil {
+		return row, err
+	}
 	g, f := goTimer(c), c.Ref
 	var err error
 	if row.GoIters, err = Calibrate(g, opt.MinTime); err != nil {
@@ -223,33 +233,61 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 	if row.RefIters, err = Calibrate(f, opt.MinTime); err != nil {
 		return row, err
 	}
-	for r := 0; r < opt.Rounds; {
+	// The sides, in the order of the registry: Go, the primary, the extra ones.
+	// Round r runs them rotated by r mod len(sides), so that every side takes
+	// every position once per len(sides) rounds. With two sides this is the
+	// alternation of schema 1 (Go first on even rounds).
+	sides := []roundSide{
+		{id: SideGo, t: g, iters: row.GoIters},
+		{id: SidePrimary, t: f, iters: row.RefIters},
+	}
+	for i, r := range c.Refs {
+		it, err := Calibrate(r.Timer, opt.MinTime)
+		if err != nil {
+			return row, fmt.Errorf("%s: %w", r.ID, err)
+		}
+		row.Refs[i].Iters = it
+		sides = append(sides, roundSide{id: r.ID, t: r.Timer, iters: it})
+	}
+	k := len(sides)
+	rounds := opt.Rounds
+	if k > 2 && rounds%k != 0 {
+		rounds += k - rounds%k
+	}
+	for r := 0; r < rounds; {
 		load, err := opt.gate(ctx)
 		if err != nil {
 			return row, err
 		}
-		rd := Round{LoadBefore: load, GoFirst: r%2 == 0}
-		sides := [2]struct {
-			t     Timer
-			iters int
-			out   *float64
-		}{{g, row.GoIters, &rd.GoNs}, {f, row.RefIters, &rd.RefNs}}
-		if !rd.GoFirst {
-			sides[0], sides[1] = sides[1], sides[0]
+		rd := Round{LoadBefore: load, GoFirst: sideIndex(sides, r%k, SideGo) < sideIndex(sides, r%k, SidePrimary)}
+		if k > 2 {
+			rd.RefsNs = make(map[string]float64, k-2)
 		}
-		for _, s := range sides {
+		for p := 0; p < k; p++ {
+			s := sides[(r+p)%k]
 			d, err := s.t(s.iters)
 			if err != nil {
 				return row, err
 			}
-			*s.out = float64(d.Nanoseconds()) / float64(s.iters)
+			ns := float64(d.Nanoseconds()) / float64(s.iters)
+			switch s.id {
+			case SideGo:
+				rd.GoNs = ns
+			case SidePrimary:
+				rd.RefNs = ns
+			default:
+				rd.RefsNs[s.id] = ns
+			}
+			if k > 2 {
+				rd.Order = append(rd.Order, s.id)
+			}
 		}
 		if rd.LoadAfter, err = opt.Load(); err != nil {
 			return row, fmt.Errorf("cannot read the load average: %w", err)
 		}
 		if rd.LoadAfter >= opt.MaxLoad {
-			// Discarded; the same round (same side order) is run again once the
-			// gate is open.
+			// Discarded for every side; the same round (same side order) is run
+			// again once the gate is open.
 			row.Retries++
 			if row.Retries > opt.MaxRetries {
 				return row, errRetryCap
@@ -260,4 +298,60 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 		r++
 	}
 	return row, nil
+}
+
+type roundSide struct {
+	id    string
+	t     Timer
+	iters int
+}
+
+// sideIndex returns the position of side id in the round whose rotation is rot.
+func sideIndex(sides []roundSide, rot int, id string) int {
+	k := len(sides)
+	for p := 0; p < k; p++ {
+		if sides[(rot+p)%k].id == id {
+			return p
+		}
+	}
+	return -1
+}
+
+// scoreAccuracy evaluates Go, the primary reference and every Ref with an Eval
+// on the case's points and stores the results in the row. It is deterministic,
+// so it is not gated; an evaluation error stops the run (a series with a hole
+// is biased).
+func scoreAccuracy(c Case, row *Row) error {
+	a := c.Accuracy
+	if a == nil {
+		return nil
+	}
+	score := func(who string, eval EvalFunc) (*AccResult, error) {
+		if eval == nil {
+			return nil, nil
+		}
+		got, err := eval()
+		if err != nil {
+			return nil, fmt.Errorf("accuracy of %s: %w", who, err)
+		}
+		res := a.Score(got)
+		if !res.valid() {
+			return nil, fmt.Errorf("accuracy of %s: the scorer returned an out-of-range result", who)
+		}
+		return &res, nil
+	}
+	var err error
+	if row.GoAccuracy, err = score("Go", a.Go); err != nil {
+		return err
+	}
+	if row.PrimaryAccuracy, err = score(SidePrimary, c.RefEval); err != nil {
+		return err
+	}
+	row.GoBudget = a.Budget
+	for i, r := range c.Refs {
+		if row.Refs[i].Accuracy, err = score(r.ID, r.Eval); err != nil {
+			return err
+		}
+	}
+	return nil
 }
