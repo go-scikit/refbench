@@ -36,8 +36,10 @@ jobs:
           COVERPKG=$(go list ./... | paste -sd, -)
           go test -race -coverpkg="$COVERPKG" -coverprofile=cover.out ./...
           go tool cover -func=cover.out | tail -n 40
-          go tool cover -func=cover.out | tail -1 | grep -q '100.0%' || {
-            echo "::error::coverage below 100%"; exit 1; }
+          # go tool cover's total is rounded to one decimal (99.95 reads 100.0);
+          # covblocks lists every block the profile never entered (exit 1 if
+          # any, exit 2 on an empty or unreadable profile).
+          go run github.com/go-fleettools/fleettools/cmd/covblocks@v0.104.0 cover.out
 
   # int is 32 bits here: v0.1.0 did not compile on 386 and arm.
   arch-386:
