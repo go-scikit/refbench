@@ -23,6 +23,9 @@ skeleton) is implemented in the PR that adds this file; later steps are not.
 >   in the deferred list, section 3.1) and the Python `L` request (section 3.4):
 >   both need a consumer to design against. The first multi-reference run must
 >   still reproduce the fixtures' SciPy column bit for bit (`FirstDiff`).
+> - **pkgx syntax.** pkgx 2.11 rejects `+julialang.org@=1.13.3` ("invalid
+>   semver"); the worker is started with `+julialang.org@1.13.3` and
+>   `StartJulia` refuses it unless it reports exactly the pinned version.
 > - `Round` is no longer a comparable struct (it carries a map and a slice):
 >   compare rounds with `reflect.DeepEqual`.
 

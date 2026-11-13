@@ -102,6 +102,115 @@ committed sources (`-O2 -ffp-contract=off`), so the library never needs cgo. A
 repository that already has a cgo module may keep it and time it through the
 same runner (go-geometry/predicates `bench/` does).
 
+## Several references per case (schema 2)
+
+SciPy is not the only bar: Julia, Boost.Math and the Fortran libraries are
+references too. `Case.Ref` stays the primary reference (existing tables and
+sentences stay true); `Case.Refs` adds more, timed in the same rounds
+([design](docs/design/multiref.md); the maintainer decisions of
+[#15](https://github.com/go-scikit/refbench/issues/15) override it):
+
+```go
+c.Refs = []refbench.Ref{
+	{ID: "julia:Bessels.besselk", License: "MIT", Timer: julia.Timer("kv", "bessels_kv"), Eval: julia.Evaler("kv", "bessels_kv", out, nil)},
+	{ID: "boost:cyl_bessel_k", License: "BSL-1.0", Timer: boost.Timer("kv", "kv")},
+}
+c.RefEval = scipyEval // the primary reference's values on the accuracy points
+c.Accuracy = &refbench.Accuracy{Go: goEval, Score: ulpAgainstMpmath, Budget: 4}
+```
+
+- **Rounds rotate.** With *k* sides (Go, the primary, the extra ones) round *r*
+  runs them rotated by *r* mod *k*, so every side takes every position once per
+  *k* rounds, and `Rounds` is rounded up to a multiple of *k*. With two sides it
+  is exactly the alternation above. A round above the gate is discarded for all
+  sides.
+- **One verdict per reference**, the rule above, plus a headline against the
+  **fastest side** (`best`, the primary included). **A gap against any faster
+  reference is a defect, even when that reference is less accurate**: `refbench
+  issues` drafts one issue per case when Go is slower than any side, titled after
+  the fastest of them, with every reference, its license, version, ratio and max
+  ulp in the body.
+- **Accuracy in the same row.** `Accuracy.Score` is the repository's own scorer
+  (special: ulp against the mpmath `hi+lo` fixtures); Go, the primary
+  (`Case.RefEval`) and every `Ref.Eval` are scored on the same points, once,
+  ungated, before the rounds. `AccResult` carries `MaxULP` (+Inf, written
+  `"inf"`, when a finite value was expected and NaN came back), `MaxULPFin` and
+  `Coverage`, so a reference that refuses half the domain does not look
+  accurate. Labels: `ahead`, `faster-less-accurate` (an accuracy defect),
+  `behind`, `tradeoff` (slower than a reference that is less accurate than Go's
+  stated `Budget`: still a perf defect). The first multi-reference run must
+  reproduce the fixtures' SciPy column bit for bit (`FirstDiff`), which proves the
+  inputs reach the workers unaltered.
+- **Schema.** A repository with no `Refs` keeps writing schema 1, byte for byte
+  (a golden test pins it). One with `Refs` writes **schema 2**, which an older
+  refbench refuses (`perf.json: schema 2, this build reads 1`): bump refbench in
+  the same PR. `Round` carries a map and a slice, so it is no longer comparable
+  with `==` (use `reflect.DeepEqual`). The table gains a second section,
+  "Against other references".
+- **CI stays cheap.** `rbtest` starts no runtime: besides allocations, table and
+  coverage it checks that every `Ref.ID` (`<kind>:<name>`, unique) has an entry in
+  its row, that every reference has a license, that none is GPL unless its kind
+  is a black-box kind (`r`, `gsl`), and that the table regenerates from the JSON.
+- **Calibrate** discards one untimed first call: a reference that compiles on its
+  first call (Julia) would otherwise last longer than `MinTime` at `iters = 1`
+  and settle on single-call samples.
+
+### The rbw1 worker protocol
+
+One request line, one reply line, plain ASCII, at most 4096 bytes (a longer line
+is refused, never buffered), for Julia, R, C++ and Fortran (Python keeps JSON):
+
+```
+L <key> <path> <cols> <rows>   load float64 little-endian column-major  -> ok <sha256 of the bytes read>
+W <key> <fn>                   one untimed call (JIT warm-up)           -> ok
+T <key> <fn> <iters>           time iters calls inside the worker       -> ns <float>
+E <key> <fn> <outpath>         evaluate once, write rows float64        -> ok <n_nonfinite> <n_raised>
+V                              versions and observed threading          -> v k=v k=v ...
+```
+
+`<fn>` is a name in a fixed table in the worker (`KERNELS` in Julia,
+`rbw1_kernels` in the harness): nothing read from the pipe is evaluated. Paths
+must lie in the run directory (`DataDir`: `os.UserCacheDir()/refbench/<repo>/<commit>`,
+never `/tmp`), sizes are bounded (256 MiB). `WriteF64` writes an argument file and
+returns its SHA-256, `RBW1.Load` compares it with the worker's and refuses a
+mismatch naming both digests before anything is timed. `RBW1.Timer` runs one
+untimed `W` before the first timed call. `CheckSingleThread` refuses a worker
+whose `V` reply does not show `threads=1` (and every `*_threads` at 1): the
+environment variables are asked for, what the worker observed is checked.
+`ParseRBW1Reply` has a fuzz target and a committed corpus.
+
+### Julia references
+
+`refbench.StartJulia(ctx, refbench.JuliaConfig{...})` runs the julialang.org
+binary through **pkgx** (never brew), pinned (`JuliaConfig.Version`, refused
+unless the worker reports exactly it):
+
+```
+pkgx +julialang.org@1.13.3 -- julia --startup-file=no --history-file=no -t 1 --project=<dir> -e <worker> <kernels.jl>
+```
+
+with `JULIA_NUM_THREADS=1`, `JULIA_NUM_GC_THREADS=1`, `JULIA_PKG_OFFLINE=true` and
+`JULIA_DEPOT_PATH` set. The project (`Project.toml`, `Manifest.toml` with exact
+versions and git-tree-sha1 content hashes) is committed in the consumer
+repository; the depot is instantiated and precompiled once, outside any gated
+run. `kernels.jl` defines `KERNELS = Dict("name" => scalar_function, ...)`; the
+timed body is `out .= f.(args...)` in a function barrier on typed
+`Vector{Float64}`s, with no `@fastmath`. The versions (Julia, LLVM, every
+package of the Manifest with its tree hash) come back under `julia/...` keys for
+`Options.RefVersions`, so `-perf.resume` refuses a different set.
+
+### Compiled references (C, C++, Fortran, Boost.Math)
+
+`workers/compiled/rbw1.cpp` (embedded as `CompiledHarnessSource`) is the harness
+of a small stdin/stdout worker; a program adds a kernel table
+(`rbw1_kernels`) and the kernels, in C++ or in Fortran (`bind(C)`); see
+`workers/compiled/examples`. `BuildWorker(ctx, cc, out, refbench.ReleaseFlags,
+sources)` compiles it (`-O2`, the compiler's own FP contraction, no
+`-march=native`: the reference's normal release build; a different flag set is a
+different `Ref.ID`) and returns the SHA-256 of every source and the flags for
+`ref_versions`. R is not wired yet; when it comes it is `Rscript` only, GPL code is
+never linked or read.
+
 ## CI mode: allocations, table, denominator
 
 No Python, no timing, on every pull request. `rbtest` is the `go test` glue,
@@ -148,6 +257,8 @@ module) declares the parent of the running binary's module path, or the module
 itself: a binary of one repository run from another's `bench/` directory refuses,
 naming both module paths. `refbench.RunCI` is what the default mode calls:
 
+0. with `Case.Refs`: every reference has an entry in its row, a license, and no
+   GPL outside a black-box kind (see above);
 1. every case's allocations per call must equal `docs/perf.json`'s (an increase
    is a regression; a decrease must be recorded);
 2. `docs/perf-table.md` must be what `docs/perf.json` generates (no hand edits);
@@ -172,6 +283,13 @@ body with the row, the machine, the load of every round, the reference versions
 and the commit (`<case>.title.txt` and `<case>.md` with `--out`, for
 `gh issue create --title ... --body-file`). A deferred report, or one with no
 valid row, drafts nothing; a partial one drafts from its valid rows.
+
+## Not yet (multi-reference, step 1)
+
+- Restricting a run to some kinds (`-perf.refs`) and `case@refID` in the
+  deferred list; the Python `L` request (the NumPy `setup` stays).
+- The R worker; a shared home for the per-library kernels (Boost, AMOS,
+  QUADPACK, MINPACK); `refbench prepare`.
 
 ## Not in v0.1.0
 

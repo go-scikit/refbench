@@ -45,9 +45,12 @@ type JuliaConfig struct {
 
 // JuliaArgs returns the arguments of the pkgx command that runs the worker:
 //
-//	pkgx +julialang.org@=<version> -- julia --startup-file=no --history-file=no -t 1 --project=<dir> -e <worker> <kernels>
+// (pkgx 2.11 rejects the "@=" exact form of the design with "invalid semver";
+// the version is pinned by what the worker reports, which StartJulia checks.)
+//
+//	pkgx +julialang.org@<version> -- julia --startup-file=no --history-file=no -t 1 --project=<dir> -e <worker> <kernels>
 func JuliaArgs(c JuliaConfig) []string {
-	return []string{"+julialang.org@=" + c.Version, "--", "julia",
+	return []string{"+julialang.org@" + c.Version, "--", "julia",
 		"--startup-file=no", "--history-file=no", "-t", "1", "--project=" + c.Project,
 		"-e", JuliaWorkerSource, c.Kernels}
 }

@@ -484,7 +484,7 @@ func TestBombOversizedLineFromAProcess(t *testing.T) {
 func TestJuliaArgsAndEnv(t *testing.T) {
 	c := juliaCfg(t)
 	args := JuliaArgs(c)
-	want := []string{"+julialang.org@=1.13.3", "--", "julia", "--startup-file=no", "--history-file=no", "-t", "1", "--project=/p", "-e"}
+	want := []string{"+julialang.org@1.13.3", "--", "julia", "--startup-file=no", "--history-file=no", "-t", "1", "--project=/p", "-e"}
 	for i, w := range want {
 		if args[i] != w {
 			t.Errorf("args[%d] = %q, want %q", i, args[i], w)
