@@ -103,6 +103,18 @@ func TestStartRBW1PipeErrors(t *testing.T) {
 	}
 }
 
+func TestStartRBW1DefaultEnvIsSingleThread(t *testing.T) {
+	helperRBW1(t, "ok")
+	w, err := StartRBW1(context.Background(), RBW1Config{Dir: t.TempDir(), Funcs: []string{"f"}}, nil, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if !strings.Contains(strings.Join(w.cmd.Env, "\n"), "OMP_NUM_THREADS=1") {
+		t.Error("the default environment is not SingleThreadEnv")
+	}
+}
+
 func TestRunStopsOnATimerErrorInARound(t *testing.T) {
 	var log []string
 	c := multiCase(&log)
