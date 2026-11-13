@@ -262,6 +262,12 @@ func (w *RBW1) check(key, fn string) error {
 	if !w.funcs[fn] {
 		return fmt.Errorf("rbw1: function %q is not in the worker's table", fn)
 	}
+	// Only a key whose LAST Load verified the digest may be warmed, timed or
+	// evaluated: a mismatch, or a reload that failed after an earlier success,
+	// leaves the worker holding data that is not the Go side's.
+	if _, ok := w.rows[key]; !ok {
+		return fmt.Errorf("rbw1: key %q has no verified load", key)
+	}
 	return nil
 }
 
@@ -283,6 +289,7 @@ func (w *RBW1) Load(key, path string, cols, rows int, want string) error {
 	if !rbw1KeyPattern.MatchString(key) {
 		return fmt.Errorf("rbw1: key %q is not a plain identifier", key)
 	}
+	delete(w.rows, key) // verified again only if this load succeeds
 	if err := w.inDir(path); err != nil {
 		return err
 	}

@@ -234,9 +234,12 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 		return row, err
 	}
 	// The sides, in the order of the registry: Go, the primary, the extra ones.
-	// Round r runs them rotated by r mod len(sides), so that every side takes
-	// every position once per len(sides) rounds. With two sides this is the
-	// alternation of schema 1 (Go first on even rounds).
+	// Round r runs them in the order williamsOrders(k)[r mod period]: every
+	// side takes every position equally often AND every ordered pair of sides
+	// is adjacent equally often, so that no side always follows the same other
+	// one (a plain rotation balances positions, not that first-order carryover).
+	// With two sides this is the alternation of schema 1 (Go first on even
+	// rounds).
 	sides := []roundSide{
 		{id: SideGo, t: g, iters: row.GoIters},
 		{id: SidePrimary, t: f, iters: row.RefIters},
@@ -250,23 +253,23 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 		sides = append(sides, roundSide{id: r.ID, t: r.Timer, iters: it})
 	}
 	k := len(sides)
+	orders := williamsOrders(k)
 	rounds := opt.Rounds
-	if k > 2 && rounds%k != 0 {
-		rounds += k - rounds%k
+	if p := len(orders); k > 2 && rounds%p != 0 {
+		rounds += p - rounds%p
 	}
 	for r := 0; r < rounds; {
 		load, err := opt.gate(ctx)
 		if err != nil {
 			return row, err
 		}
-		// Go is side 0 and the primary side 1: at position (i - r mod k) mod k.
-		goPos, primaryPos := (k-r%k)%k, (k+1-r%k)%k
-		rd := Round{LoadBefore: load, GoFirst: goPos < primaryPos}
+		order := orders[r%len(orders)]
+		rd := Round{LoadBefore: load, GoFirst: before(order, 0, 1)}
 		if k > 2 {
 			rd.RefsNs = make(map[string]float64, k-2)
 		}
 		for p := 0; p < k; p++ {
-			s := sides[(r+p)%k]
+			s := sides[order[p]]
 			d, err := s.t(s.iters)
 			if err != nil {
 				return row, err
@@ -300,6 +303,56 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 		r++
 	}
 	return row, nil
+}
+
+// williamsOrders returns the run orders of k sides over one period: a Williams
+// design (a balanced Latin square). Row i is (s[j] + i) mod k for the zigzag
+// s = 0, 1, k-1, 2, k-2, ...; for even k the k rows balance positions and
+// every ordered pair of sides is adjacent exactly once; for odd k the rows and
+// their reversals (2k rows) do. k = 2 gives {0,1}, {1,0}.
+func williamsOrders(k int) [][]int {
+	s := make([]int, k)
+	lo, hi := 1, k-1
+	for j := 1; j < k; j++ {
+		if j%2 == 1 {
+			s[j] = lo
+			lo++
+		} else {
+			s[j] = hi
+			hi--
+		}
+	}
+	var out [][]int
+	for i := 0; i < k; i++ {
+		row := make([]int, k)
+		for j := range row {
+			row[j] = (s[j] + i) % k
+		}
+		out = append(out, row)
+	}
+	if k%2 == 1 {
+		for i := 0; i < k; i++ {
+			rev := make([]int, k)
+			for j := range rev {
+				rev[j] = out[i][k-1-j]
+			}
+			out = append(out, rev)
+		}
+	}
+	return out
+}
+
+// before reports whether side a runs before side b in order.
+func before(order []int, a, b int) bool {
+	for _, s := range order {
+		if s == a {
+			return true
+		}
+		if s == b {
+			return false
+		}
+	}
+	return false
 }
 
 type roundSide struct {

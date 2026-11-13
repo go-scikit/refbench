@@ -119,10 +119,13 @@ c.RefEval = scipyEval // the primary reference's values on the accuracy points
 c.Accuracy = &refbench.Accuracy{Go: goEval, Score: ulpAgainstMpmath, Budget: 4}
 ```
 
-- **Rounds rotate.** With *k* sides (Go, the primary, the extra ones) round *r*
-  runs them rotated by *r* mod *k*, so every side takes every position once per
-  *k* rounds, and `Rounds` is rounded up to a multiple of *k*. With two sides it
-  is exactly the alternation above. A round above the gate is discarded for all
+- **Balanced rounds.** With *k* sides (Go, the primary, the extra ones) the
+  rounds follow a Williams design (a balanced Latin square, `k` orders for even
+  *k*, `2k` for odd): every side takes every position equally often **and every
+  ordered pair of sides is adjacent equally often**, so no side always follows
+  the same other one (a plain rotation balances positions but not that
+  carryover). `Rounds` is rounded up to a whole period. With two sides it is
+  exactly the alternation above. A round above the gate is discarded for all
   sides.
 - **One verdict per reference**, the rule above, plus a headline against the
   **fastest side** (`best`, the primary included). **A gap against any faster
@@ -134,15 +137,27 @@ c.Accuracy = &refbench.Accuracy{Go: goEval, Score: ulpAgainstMpmath, Budget: 4}
   (special: ulp against the mpmath `hi+lo` fixtures); Go, the primary
   (`Case.RefEval`) and every `Ref.Eval` are scored on the same points, once,
   ungated, before the rounds. `AccResult` carries `MaxULP` (+Inf, written
-  `"inf"`, when a finite value was expected and NaN came back), `MaxULPFin` and
-  `Coverage`, so a reference that refuses half the domain does not look
-  accurate. Labels: `ahead`, `faster-less-accurate` (an accuracy defect),
-  `behind`, `tradeoff` (slower than a reference that is less accurate than Go's
-  stated `Budget`: still a perf defect). The first multi-reference run must
-  reproduce the fixtures' SciPy column bit for bit (`FirstDiff`), which proves the
-  inputs reach the workers unaltered.
-- **Schema.** A repository with no `Refs` keeps writing schema 1, byte for byte
-  (a golden test pins it). One with `Refs` writes **schema 2**, which an older
+  `"inf"`, when a finite value was expected and NaN came back), `MaxULPFin`,
+  `Disagree` (the number of such special-value disagreements) and `Coverage`, so
+  a reference that refuses half the domain does not look accurate. Labels:
+  `ahead`, `faster-less-accurate` (an accuracy defect), `behind`, `tradeoff`
+  (slower than a reference that is less accurate than Go's stated `Budget`: still
+  a perf defect). **The labels are judged on `MaxULPFin`**, the worst error over
+  the finite results: one special-value disagreement must not decide between
+  `behind` and `tradeoff`; it is reported (`MaxULP`, `Disagree`), not judged.
+- **Not enforced yet: the SciPy column check.** Decision of #15: the first
+  multi-reference run must reproduce the fixtures' SciPy column bit for bit,
+  which proves the inputs reach the workers unaltered. Step 1 has the helper
+  (`FirstDiff`, tested on its own) but **no gate calls it**: the Python worker
+  has no `L` request yet, so nothing can run SciPy on the file the other workers
+  read. This is deferred to step 2 (Python `L`, then a gate with a planted
+  negative control). What step 1 does enforce is the SHA-256 of every argument
+  file, for the workers that have `L`.
+- **Schema.** A repository with no `Refs` and no `Accuracy` keeps writing schema 1,
+  byte for byte (a golden test pins it). One with `Refs`, or with `Accuracy`
+  (`go_accuracy`, `primary_accuracy`, `go_budget` are schema 2 fields; one
+  predicate decides what is written and what a schema 1 file may carry), writes
+  **schema 2**, which an older
   refbench refuses (`perf.json: schema 2, this build reads 1`): bump refbench in
   the same PR. `Round` carries a map and a slice, so it is no longer comparable
   with `==` (use `reflect.DeepEqual`). The table gains a second section,
@@ -173,11 +188,25 @@ V                              versions and observed threading          -> v k=v
 must lie in the run directory (`DataDir`: `os.UserCacheDir()/refbench/<repo>/<commit>`,
 never `/tmp`), sizes are bounded (256 MiB). `WriteF64` writes an argument file and
 returns its SHA-256, `RBW1.Load` compares it with the worker's and refuses a
-mismatch naming both digests before anything is timed. `RBW1.Timer` runs one
+mismatch naming both digests, and **a key whose last `Load` did not verify
+(a mismatch, or a reload that failed after an earlier success) cannot be warmed,
+timed or evaluated**. `RBW1.Timer` runs one
 untimed `W` before the first timed call. `CheckSingleThread` refuses a worker
 whose `V` reply does not show `threads=1` (and every `*_threads` at 1): the
 environment variables are asked for, what the worker observed is checked.
+Julia reports its real thread, GC-thread and BLAS-thread counts. The compiled
+harness reports `threads_source`: `omp` (`omp_get_max_threads()`, when built with
+OpenMP), `proc` (the process's thread count from `/proc/self/status`, Linux) or
+`assumed` (the harness starts no thread; **a linked library that starts its own is
+not detected there**: the check is unverified for compiled workers on those
+hosts, and the record says so). A Julia kernel that raises on every point is a
+broken kernel and is refused, not reported as an all-NaN column.
 `ParseRBW1Reply` has a fuzz target and a committed corpus.
+
+**Gap:** `worker.jl` needs Julia and runs in no CI lane (CI installs no runtime).
+`REFBENCH_JULIA=1 go test -run TestJuliaWorkerReal .` runs it for real (pkgx,
+pinned Julia, kernels that need no package) on a host that has them; it passed
+on the reference host before this release.
 
 ### Julia references
 

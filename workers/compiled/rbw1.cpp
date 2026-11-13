@@ -26,6 +26,9 @@
 #include <map>
 #include <string>
 #include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 extern "C" {
 typedef void (*rbw1_fn)(int64_t n, const double *const *cols, double *out);
@@ -152,6 +155,30 @@ rbw1_fn find(const std::string &name) {
 	return nullptr;
 }
 
+// threadInfo reports what the harness can observe, and says where it comes from:
+// the OpenMP maximum when the worker is built with it, else (Linux) the number
+// of threads of this process now, else an assumption ("assumed": the harness
+// starts no thread, but a linked library that does so is NOT detected there).
+std::string threadInfo() {
+#ifdef _OPENMP
+	return "threads=" + std::to_string(omp_get_max_threads()) + " threads_source=omp";
+#elif defined(__linux__)
+	FILE *f = fopen("/proc/self/status", "r");
+	if (f) {
+		char l[256];
+		while (fgets(l, sizeof l, f)) {
+			long n;
+			if (sscanf(l, "Threads: %ld", &n) == 1) {
+				fclose(f);
+				return "threads=" + std::to_string(n) + " threads_source=proc";
+			}
+		}
+		fclose(f);
+	}
+#endif
+	return "threads=1 threads_source=assumed";
+}
+
 void call(rbw1_fn f, Data &d) {
 	f(d.rows, d.cols.data(), d.out.data());
 	g_sink = g_sink + d.out[0];
@@ -224,7 +251,7 @@ void handle(const std::string &line) {
 #endif
 		for (char &ch : ver)
 			if (ch == ' ') ch = '_';
-		std::string s = "v compiler=" + ver + " threads=1 ldbl_mant_dig=" + std::to_string(LDBL_MANT_DIG);
+		std::string s = "v compiler=" + ver + " " + threadInfo() + " ldbl_mant_dig=" + std::to_string(LDBL_MANT_DIG);
 #ifdef RBW1_FLAGS
 		std::string fl = RBW1_FLAGS;
 		for (char &ch : fl)

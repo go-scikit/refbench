@@ -103,12 +103,16 @@ type AccResult struct {
 	Coverage float64 `json:"coverage"`
 	// Points is the number of points scored.
 	Points int `json:"points"`
+	// Disagree counts the points where the side returned a non-finite value
+	// where a finite one was expected, or the reverse (the points that make
+	// MaxULP infinite). Reported, never judged.
+	Disagree int `json:"disagree,omitempty"`
 }
 
 func (a AccResult) valid() bool {
 	m, f := float64(a.MaxULP), float64(a.MaxULPFin)
 	return !math.IsNaN(m) && m >= 0 && !math.IsNaN(f) && f >= 0 &&
-		!math.IsNaN(a.Coverage) && a.Coverage >= 0 && a.Coverage <= 1 && a.Points >= 0
+		!math.IsNaN(a.Coverage) && a.Coverage >= 0 && a.Coverage <= 1 && a.Points >= 0 && a.Disagree >= 0 && a.Disagree <= a.Points
 }
 
 // RefRow is one extra reference's result in a row. ID, Name and License come
@@ -144,13 +148,19 @@ const (
 // Label combines the time verdict with the accuracy. Without accuracy on both
 // sides a faster Go has no label (no accuracy claim is made) and a slower Go is
 // behind.
+//
+// The judge is MaxULPFin, the worst error over the points where each side
+// returned a finite value: one special-value disagreement (MaxULP = +Inf, a
+// NaN where a number was expected) must not decide between "behind" and
+// "tradeoff". Those disagreements are reported separately (AccResult.Disagree,
+// and MaxULP itself).
 func Label(verdict string, goAcc, refAcc *AccResult, budget float64) string {
 	if verdict == Slower {
 		if goAcc != nil && refAcc != nil {
 			if budget <= 0 {
-				budget = float64(goAcc.MaxULP)
+				budget = float64(goAcc.MaxULPFin)
 			}
-			if float64(refAcc.MaxULP) > budget {
+			if float64(refAcc.MaxULPFin) > budget {
 				return LabelTradeoff
 			}
 		}
@@ -159,7 +169,7 @@ func Label(verdict string, goAcc, refAcc *AccResult, budget float64) string {
 	if verdict == "" || goAcc == nil || refAcc == nil {
 		return ""
 	}
-	if goAcc.MaxULP <= refAcc.MaxULP {
+	if goAcc.MaxULPFin <= refAcc.MaxULPFin {
 		return LabelAhead
 	}
 	return LabelFasterLessAccurate
@@ -224,10 +234,17 @@ func (r RefRow) label() string {
 	return r.ID
 }
 
-// usesRefs reports whether any row carries extra references.
+// usesMultiRef reports whether a row carries any schema 2 field: extra
+// references, or accuracy (Go's, the primary's) and its budget. One predicate
+// decides the schema Finish writes and what a schema 1 file may not contain.
+func (row Row) usesMultiRef() bool {
+	return len(row.Refs) > 0 || row.GoAccuracy != nil || row.PrimaryAccuracy != nil || row.GoBudget != 0
+}
+
+// usesRefs reports whether any row needs schema 2.
 func (r *Report) usesRefs() bool {
 	for _, row := range r.Rows {
-		if len(row.Refs) > 0 {
+		if row.usesMultiRef() {
 			return true
 		}
 	}
@@ -348,8 +365,7 @@ func FirstDiff(a, b []float64) int {
 
 // checkMultiRef validates the schema 2 fields of a row read from a file.
 func checkMultiRef(row Row, schema int) error {
-	extra := len(row.Refs) > 0 || row.GoAccuracy != nil || row.PrimaryAccuracy != nil || row.GoBudget != 0
-	if schema == SchemaVersion && extra {
+	if schema == SchemaVersion && row.usesMultiRef() {
 		return errors.New("a schema 1 file carries extra-reference fields (schema 2 is required)")
 	}
 	if !finiteNonNeg(row.GoBudget) {

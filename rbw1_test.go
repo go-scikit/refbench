@@ -100,6 +100,7 @@ func fake(t *testing.T, dir string, funcs []string, respond func(line string) st
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.rows["x"] = 1 // tests that need an unverified key start with a failed Load
 	t.Cleanup(func() { inW.Close(); outR.Close() })
 	return w
 }
@@ -199,8 +200,13 @@ func TestRBW1RefusesBeforeSending(t *testing.T) {
 	}
 }
 
-func evalErr(w *RBW1, p string) error { _, _, err := w.Eval("x", "f", p); return err }
+func evalErr(w *RBW1, p string) error {
+	w.rows["x"] = 1 // a verified key: the refusal must come from the path
+	_, _, err := w.Eval("x", "f", p)
+	return err
+}
 func timeErr(w *RBW1, fn string, it int) error {
+	w.rows["x"] = 1 // the map of cases runs in any order, and Load un-verifies the key
 	_, err := w.Time("x", fn, it)
 	return err
 }
@@ -231,15 +237,18 @@ func TestRBW1RefusesBadReplies(t *testing.T) {
 	}
 	for _, r := range []string{"ns 1", "ok 1", "err no", "v a=1"} {
 		reply = r
+		w.rows["x"] = 1 // verified: the replies are what is under test
 		check("warm", w.Warm("x", "f"))
 	}
 	for _, r := range []string{"ok", "v a=1", "ns 1e300", "err x"} {
 		reply = r
+		w.rows["x"] = 1
 		_, err := w.Time("x", "f", 1)
 		check("time", err)
 	}
 	for _, r := range []string{"ns 1", "ok", "ok 1", "ok -1 0", "ok 0 x", "ok 1 2 3", "err x"} {
 		reply = r
+		w.rows["x"] = 1
 		_, _, err := w.Eval("x", "f", filepath.Join(dir, "o"))
 		check("eval", err)
 	}
@@ -278,6 +287,7 @@ func TestRBW1ProcessEnded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.rows["x"] = 1
 	inW.Close() // the write fails
 	if err := w.Warm("x", "f"); err == nil {
 		t.Error("write to a closed worker accepted")
@@ -291,6 +301,7 @@ func TestRBW1ProcessEnded(t *testing.T) {
 	go func() { io.Copy(io.Discard, in2R) }()
 	out2W.Close()
 	w2, _ := NewRBW1(in2W, out2R, RBW1Config{Dir: t.TempDir(), Funcs: []string{"f"}})
+	w2.rows["x"] = 1
 	if err := w2.Warm("x", "f"); err == nil || !strings.Contains(err.Error(), "ended") {
 		t.Errorf("eof: %v", err)
 	}
@@ -298,6 +309,7 @@ func TestRBW1ProcessEnded(t *testing.T) {
 	in3R, in3W := io.Pipe()
 	go func() { io.Copy(io.Discard, in3R) }()
 	w3, _ := NewRBW1(in3W, errReader{}, RBW1Config{Dir: t.TempDir(), Funcs: []string{"f"}})
+	w3.rows["x"] = 1
 	if err := w3.Warm("x", "f"); err == nil || !strings.Contains(err.Error(), "io") {
 		t.Errorf("read error: %v", err)
 	}
@@ -348,6 +360,7 @@ func TestBombOversizedLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.rows["x"] = 1
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	err = w.Warm("x", "f")
@@ -426,6 +439,7 @@ func TestStartJulia(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	w.rows["x"] = 1
 	if v["julia/julia"] != "1.13.3" || v["julia/Bessels"] != "0.2.8@abc" || v["julia/dir"] != c.Dir {
 		t.Errorf("versions = %v", v)
 	}
@@ -470,6 +484,7 @@ func TestBombOversizedLineFromAProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.rows["x"] = 1
 	done := make(chan error, 1)
 	go func() { done <- w.Warm("x", "f") }()
 	select {
@@ -683,7 +698,7 @@ func exerciseCompiled(t *testing.T, bin, fn string) {
 	}
 	defer w.Close()
 	v, err := w.Versions()
-	if err != nil || CheckSingleThread(v) != nil || v["compiler"] == "" {
+	if err != nil || CheckSingleThread(v) != nil || v["compiler"] == "" || v["threads_source"] == "" {
 		t.Fatalf("versions = %v %v", v, err)
 	}
 	x := []float64{1, 4, 9, -1, 16}
@@ -691,12 +706,16 @@ func exerciseCompiled(t *testing.T, bin, fn string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Load("x", path, 1, rows, sha); err != nil {
-		t.Fatal(err)
-	}
-	// Negative control: a planted wrong digest is refused with both digests.
+	// Negative control: a planted wrong digest is refused with both digests, and
+	// the key is then unusable until a load verifies.
 	if err := w.Load("x", path, 1, rows, strings.Repeat("0", 64)); err == nil || !strings.Contains(err.Error(), sha) {
 		t.Errorf("wrong digest: %v", err)
+	}
+	if _, err := w.Timer("x", fn)(1); err == nil {
+		t.Error("timed a key whose digest did not verify")
+	}
+	if err := w.Load("x", path, 1, rows, sha); err != nil {
+		t.Fatal(err)
 	}
 	var nf int
 	got, err := w.Evaler("x", fn, filepath.Join(dir, "o.f64"), func(n, _ int) { nf = n })()

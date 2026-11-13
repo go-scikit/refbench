@@ -160,9 +160,13 @@ func TestPerReferenceVerdictsLabelsAndAccuracy(t *testing.T) {
 }
 
 func TestLabel(t *testing.T) {
-	two := &AccResult{MaxULP: 2}
-	one := &AccResult{MaxULP: 1}
+	two := &AccResult{MaxULP: 2, MaxULPFin: 2}
+	one := &AccResult{MaxULP: 1, MaxULPFin: 1}
 	zero := &AccResult{}
+	// One special-value disagreement (MaxULP = +Inf) must not decide: only the
+	// worst error over the finite results does.
+	inf1 := &AccResult{MaxULP: ULP(math.Inf(1)), MaxULPFin: 1, Disagree: 1, Points: 5}
+	inf3 := &AccResult{MaxULP: ULP(math.Inf(1)), MaxULPFin: 3, Disagree: 1, Points: 5}
 	cases := []struct {
 		v       string
 		g, r    *AccResult
@@ -180,6 +184,11 @@ func TestLabel(t *testing.T) {
 		{Faster, two, one, 0, LabelFasterLessAccurate, ""},
 		{Faster, zero, nil, 0, "", "no ref accuracy"},
 		{"", one, one, 0, "", "no verdict"},
+		{Slower, inf1, inf1, 0, LabelBehind, "both infinite, same finite error: behind (was always behind)"},
+		{Slower, inf1, inf3, 0, LabelTradeoff, "Go's own max is infinite: the finite error still decides"},
+		{Slower, inf3, inf1, 0, LabelBehind, "ref more accurate on finite points"},
+		{Faster, inf1, inf3, 0, LabelAhead, "finite error decides ahead"},
+		{Faster, inf3, inf1, 0, LabelFasterLessAccurate, "finite error decides faster-less-accurate"},
 	}
 	for _, c := range cases {
 		if got := Label(c.v, c.g, c.r, c.budget); got != c.want {

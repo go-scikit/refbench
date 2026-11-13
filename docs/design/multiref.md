@@ -21,8 +21,15 @@ skeleton) is implemented in the PR that adds this file; later steps are not.
 >   (Q4), SciPy stays primary (Q8).
 > - **Step 1 leaves out** the per-kind restriction (`-perf.refs`, `case@refID`
 >   in the deferred list, section 3.1) and the Python `L` request (section 3.4):
->   both need a consumer to design against. The first multi-reference run must
->   still reproduce the fixtures' SciPy column bit for bit (`FirstDiff`).
+>   both need a consumer to design against. The decision that the first
+>   multi-reference run must reproduce the fixtures' SciPy column bit for bit is
+>   **not enforced in step 1** (`FirstDiff` exists, no gate calls it: the Python
+>   worker has no `L` yet); it is deferred to step 2 with a planted negative
+>   control.
+> - **Round order.** Section 3.1's plain rotation keeps first-order carryover
+>   (Go always follows the same side); the rounds follow a Williams design
+>   instead (`2k` orders for odd `k`). Labels are judged on `MaxULPFin`, not on
+>   `MaxULP`.
 > - **pkgx syntax.** pkgx 2.11 rejects `+julialang.org@=1.13.3` ("invalid
 >   semver"); the worker is started with `+julialang.org@1.13.3` and
 >   `StartJulia` refuses it unless it reports exactly the pinned version.

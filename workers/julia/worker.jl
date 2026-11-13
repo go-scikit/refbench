@@ -41,7 +41,8 @@ end
 
 function load(key, path, cols, rows)
     cols = parse(Int, cols); rows = parse(Int, rows)
-    (cols > 0 && rows > 0 && cols * rows * 8 <= MAXDATA) || error("size out of range")
+    # Each factor is bounded BEFORE the product is formed: Int64 arithmetic wraps.
+    (0 < cols <= 1 << 28 && 0 < rows <= 1 << 28 && cols * rows * 8 <= MAXDATA) || error("size out of range")
     inside(path)
     bytes = read(path)
     length(bytes) == cols * rows * 8 || error("file holds $(length(bytes)) bytes, want $(cols * rows * 8)")
@@ -69,14 +70,19 @@ end
 
 function evalpoints!(f, out::Vector{Float64}, args::Tuple)
     raised = 0
+    first = nothing
     for i in eachindex(out)
         out[i] = try
             Float64(f(map(a -> a[i], args)...))
-        catch
+        catch e
+            first === nothing && (first = e)
             raised += 1
             NaN
         end
     end
+    # A kernel that raises on EVERY point is a broken kernel (wrong arity, a
+    # typo), not a domain: refuse instead of reporting an all-NaN column.
+    raised == length(out) && error("the kernel raised on every point: " * oneline(sprint(showerror, first)))
     raised
 end
 

@@ -86,12 +86,15 @@ func refsSection(b *bytes.Buffer, r *Report) {
 	}
 	b.WriteString("\n")
 	for _, row := range r.Rows {
-		if len(row.Refs) == 0 {
+		if !row.usesMultiRef() {
 			continue
 		}
 		goNs, goUlp, best, ratio, label := "—", ulpCell(row.GoAccuracy), "—", "—", "deferred"
 		if len(row.Rounds) > 0 {
-			goNs, best, ratio, label = fmt.Sprintf("%.4g", row.Go.Median), esc(sideName(row, row.Best)), fmt.Sprintf("%.2f", row.BestRatio), row.BestVerdict
+			goNs, label = fmt.Sprintf("%.4g", row.Go.Median), row.Verdict
+			if row.Best != "" { // a row with accuracy but no extra reference has no headline
+				best, ratio, label = esc(sideName(row, row.Best)), fmt.Sprintf("%.2f", row.BestRatio), row.BestVerdict
+			}
 			if row.BestLabel != "" {
 				label += ", " + row.BestLabel
 			}
@@ -153,7 +156,11 @@ func accCell(a *AccResult) string {
 	if a == nil {
 		return "no accuracy"
 	}
-	return fmt.Sprintf("%.3g ulp, cov %.0f%%", float64(a.MaxULP), 100*a.Coverage)
+	s := fmt.Sprintf("%.3g ulp, fin %.3g, cov %.0f%%", float64(a.MaxULP), float64(a.MaxULPFin), 100*a.Coverage)
+	if a.Disagree > 0 {
+		s += fmt.Sprintf(", %d disagree", a.Disagree)
+	}
+	return s
 }
 
 func cell(s Summary) string {
