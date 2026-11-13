@@ -178,17 +178,17 @@ func TestRBW1RefusesBeforeSending(t *testing.T) {
 		"dotdot":            w.Load("x", dir+"/../o.f64", 1, 1, sha),
 		"the dir itself":    w.Load("x", dir, 1, 1, sha),
 		"space in path":     w.Load("x", dir+"/a b", 1, 1, sha),
-		"zero cols":         w.Load("x", dir+"/a", 0, 1, sha),
-		"huge":              w.Load("x", dir+"/a", 1<<20, 1<<20, sha),
-		"overflow 32 bits":  w.Load("x", dir+"/a", 1<<28, 1<<28, sha),
-		"bad load key":      w.Load("", dir+"/a", 1, 1, sha),
+		"zero cols":         w.Load("x", filepath.Join(dir, "a"), 0, 1, sha),
+		"huge":              w.Load("x", filepath.Join(dir, "a"), 1<<20, 1<<20, sha),
+		"overflow 32 bits":  w.Load("x", filepath.Join(dir, "a"), 1<<28, 1<<28, sha),
+		"bad load key":      w.Load("", filepath.Join(dir, "a"), 1, 1, sha),
 		"eval outside":      evalErr(w, "/etc/passwd"),
 		"time bad fn":       timeErr(w, "g", 1),
 		"time zero iters":   timeErr(w, "f", 0),
 		"eval bad fn":       evalFnErr(w, dir),
 		"unloaded evaler":   evalerErr(w, dir),
 		"warm in timer":     timerErr(w, "g"),
-		"huge request line": w.Load("x", dir+"/"+strings.Repeat("a", RBW1MaxLine), 1, 1, sha),
+		"huge request line": w.Load("x", filepath.Join(dir, strings.Repeat("a", RBW1MaxLine)), 1, 1, sha),
 	} {
 		if err == nil {
 			t.Errorf("%s: accepted", name)
@@ -204,9 +204,12 @@ func timeErr(w *RBW1, fn string, it int) error {
 	_, err := w.Time("x", fn, it)
 	return err
 }
-func evalFnErr(w *RBW1, dir string) error { _, _, err := w.Eval("x", "zz", dir+"/o"); return err }
+func evalFnErr(w *RBW1, dir string) error {
+	_, _, err := w.Eval("x", "zz", filepath.Join(dir, "o"))
+	return err
+}
 func evalerErr(w *RBW1, dir string) error {
-	_, err := w.Evaler("never", "f", dir+"/o", nil)()
+	_, err := w.Evaler("never", "f", filepath.Join(dir, "o"), nil)()
 	return err
 }
 func timerErr(w *RBW1, fn string) error { _, err := w.Timer("x", fn)(1); return err }
@@ -224,7 +227,7 @@ func TestRBW1RefusesBadReplies(t *testing.T) {
 	}
 	for _, r := range []string{"ns 1", "ok", "ok zz", "ok " + strings.Repeat("A", 64), "ok " + strings.Repeat("1", 64), "err no"} {
 		reply = r
-		check("load", w.Load("x", dir+"/a", 1, 1, sha))
+		check("load", w.Load("x", filepath.Join(dir, "a"), 1, 1, sha))
 	}
 	for _, r := range []string{"ns 1", "ok 1", "err no", "v a=1"} {
 		reply = r
@@ -237,7 +240,7 @@ func TestRBW1RefusesBadReplies(t *testing.T) {
 	}
 	for _, r := range []string{"ns 1", "ok", "ok 1", "ok -1 0", "ok 0 x", "ok 1 2 3", "err x"} {
 		reply = r
-		_, _, err := w.Eval("x", "f", dir+"/o")
+		_, _, err := w.Eval("x", "f", filepath.Join(dir, "o"))
 		check("eval", err)
 	}
 	for _, r := range []string{"ok", "ns 1", "err x"} {

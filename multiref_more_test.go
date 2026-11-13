@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -76,7 +77,7 @@ func TestEvalerError(t *testing.T) {
 	if err := w.Load("x", path, 1, rows, sha); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Evaler("x", "f", dir+"/o", nil)(); err == nil {
+	if _, err := w.Evaler("x", "f", filepath.Join(dir, "o"), nil)(); err == nil {
 		t.Error("worker error lost")
 	}
 }
