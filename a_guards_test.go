@@ -74,16 +74,17 @@ func TestGuardFiles(t *testing.T) {
 }
 
 func TestGuardStarts(t *testing.T) {
-	old := execCommand
-	defer func() { execCommand = old }()
-	execCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "/nonexistent/refbench-guard")
-	}
+	// A process that CAN start: without the refusal of the bad configuration it
+	// would be started and the worker would be nil.
+	helperRBW1(t, "ok")
 	mustNotPanic(t, "StartRBW1 with a bad run directory", func() {
 		if _, err := StartRBW1(context.Background(), RBW1Config{Dir: "relative", Funcs: []string{"f"}}, nil, "x"); err == nil {
 			t.Error("a relative run directory accepted")
 		}
 	})
+	execCommand = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/nonexistent/refbench-guard")
+	}
 	mustNotPanic(t, "StartJulia when the worker cannot start", func() {
 		_, _, err := StartJulia(context.Background(), JuliaConfig{Pkgx: "pkgx", Version: "1.13.3", Project: "/p", Kernels: "/k.jl", Depot: "/d", Dir: t.TempDir(), Funcs: []string{"f"}})
 		if err == nil {
