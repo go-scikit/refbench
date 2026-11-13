@@ -182,7 +182,9 @@ func TestRunVerdictAndInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Rows[0].Ratio <= 0 {
+	// Structural only: Windows' coarse clock can time the Go loop at 0 ns
+	// (ratio 0); a NaN, an infinity or a negative ratio is still a defect.
+	if r := rep.Rows[0].Ratio; !(r >= 0) || math.IsInf(r, 0) {
 		t.Errorf("ratio = %v", rep.Rows[0].Ratio)
 	}
 }
