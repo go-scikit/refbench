@@ -1,9 +1,9 @@
 module github.com/go-scikit/refbench
 
-go 1.27.3
+go 1.27.4
 
 require (
-	github.com/go-fleettools/fleettools v0.81.0
+	github.com/go-fleettools/fleettools v0.111.0
 	github.com/spf13/cobra v1.10.2
 )
 
