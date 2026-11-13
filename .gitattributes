@@ -1,0 +1,2 @@
+# The golden files are compared byte for byte: no CRLF conversion on Windows.
+testdata/golden/* -text

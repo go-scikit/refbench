@@ -83,10 +83,28 @@ func TestRunRotatesSidesAndWritesSchema2(t *testing.T) {
 			}
 		}
 	}
-	// The best is the fastest side, the verdict against it.
-	if row.Best != "julia:Bessels.gamma" || row.BestVerdict != Slower {
-		t.Errorf("best = %q %q", row.Best, row.BestVerdict)
+}
+
+// synth is a measured report built by hand: Go 12000 ns, the primary
+// primaryNs, Bessels 5000, Boost 20000. A timing test on a real clock is not
+// reliable on every CI host (Windows' clock is coarse), so the tests of
+// verdicts, labels and issues do not time anything.
+func synth(primaryNs float64) *Report {
+	var log []string
+	c := multiCase(&log)
+	row := c.row(0)
+	row.GoAccuracy = &AccResult{Coverage: 1, Points: 2}
+	row.PrimaryAccuracy = &AccResult{Coverage: 1, Points: 2}
+	row.GoBudget = 1
+	row.Refs[0].Accuracy = &AccResult{MaxULP: 2, MaxULPFin: 2, Coverage: 1, Points: 2}
+	j, b := "julia:Bessels.gamma", "boost:tgamma"
+	for i, o := range [][]string{{SideGo, SidePrimary, j, b}, {SidePrimary, j, b, SideGo}, {j, b, SideGo, SidePrimary}, {b, SideGo, SidePrimary, j}} {
+		row.Rounds = append(row.Rounds, Round{LoadBefore: 1, LoadAfter: 1, GoFirst: i != 1, GoNs: 12000, RefNs: primaryNs,
+			RefsNs: map[string]float64{j: 5000, b: 20000}, Order: o})
 	}
+	rep := &Report{Schema: SchemaMultiRef, Status: StatusMeasured, MaxLoad: 8, Rows: []Row{row}}
+	rep.Finish()
+	return rep
 }
 
 func TestRoundsRoundedUpToTheNumberOfSides(t *testing.T) {
@@ -115,8 +133,12 @@ func TestTwoSidesStillAlternate(t *testing.T) {
 }
 
 func TestPerReferenceVerdictsLabelsAndAccuracy(t *testing.T) {
-	rep, _ := runMulti(t, 4)
+	rep := synth(10000)
 	row := rep.Rows[0]
+	// The best is the fastest side, the verdict against it.
+	if row.Best != "julia:Bessels.gamma" || row.BestVerdict != Slower || row.BestLabel != LabelTradeoff {
+		t.Errorf("best = %q %q %q", row.Best, row.BestVerdict, row.BestLabel)
+	}
 	bessels, boost := row.Refs[0], row.Refs[1]
 	if bessels.Verdict != Slower || bessels.Ratio <= 1 {
 		t.Errorf("bessels = %+v", bessels)
@@ -167,9 +189,7 @@ func TestLabel(t *testing.T) {
 }
 
 func TestIssueAgainstAnyFasterReference(t *testing.T) {
-	rep, _ := runMulti(t, 4)
-	// Make the primary slower than Go (Go ties or beats it) and keep the
-	// less accurate Julia reference faster: the issue is still drafted.
+	rep := synth(10000)
 	issues, err := Issues(rep)
 	if err != nil || len(issues) != 1 {
 		t.Fatalf("issues = %v, %v", issues, err)
@@ -179,13 +199,7 @@ func TestIssueAgainstAnyFasterReference(t *testing.T) {
 		t.Errorf("issue = %+v", is)
 	}
 	// Only a reference that is not the primary is faster.
-	var log []string
-	c := multiCase(&log)
-	c.Ref = fixedTimer(15000, &log, SidePrimary) // Go beats SciPy, but not Julia
-	rep2, err := Run(context.Background(), []Case{c}, Options{Rounds: 4, MinTime: time.Millisecond, Load: func() (float64, error) { return 1, nil }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	rep2 := synth(15000) // Go beats the primary, but not Julia
 	if rep2.Rows[0].Verdict != Faster {
 		t.Fatalf("setup: primary verdict %q", rep2.Rows[0].Verdict)
 	}
@@ -196,7 +210,7 @@ func TestIssueAgainstAnyFasterReference(t *testing.T) {
 }
 
 func TestSchema2RoundTripAndTable(t *testing.T) {
-	rep, _ := runMulti(t, 4)
+	rep := synth(10000)
 	var b bytes.Buffer
 	if err := rep.Write(&b); err != nil {
 		t.Fatal(err)
