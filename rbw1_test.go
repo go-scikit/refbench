@@ -88,7 +88,13 @@ func FuzzParseRBW1Reply(f *testing.F) {
 func fake(t *testing.T, dir string, funcs []string, respond func(line string) string) *RBW1 {
 	t.Helper()
 	inR, inW := io.Pipe()
-	outR, outW := io.Pipe()
+	// The replies go through an OS pipe, which buffers: a client that never
+	// reads a reply (a defect under test) then fails an assertion instead of
+	// deadlocking the worker goroutine against it.
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	go func() {
 		sc := bufio.NewScanner(inR)
 		for sc.Scan() {
@@ -413,6 +419,9 @@ func TestHelperRBW1(t *testing.T) {
 		default:
 			fmt.Println("ok")
 		}
+	}
+	if mode == "exit3" {
+		os.Exit(3) // stdin closed: leave with a status Close must report
 	}
 	os.Exit(0)
 }

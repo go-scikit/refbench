@@ -169,6 +169,13 @@ func Label(verdict string, goAcc, refAcc *AccResult, budget float64) string {
 	if verdict == "" || goAcc == nil || refAcc == nil {
 		return ""
 	}
+	// "ahead" promises at least as accurate. MaxULPFin is the measure against a
+	// reference, but a Go that returns NaN where a number is expected
+	// (Disagree), or evaluates fewer points than the reference (Coverage), is
+	// not ahead on accuracy however small its finite error is.
+	if goAcc.Disagree > 0 || goAcc.Coverage < refAcc.Coverage {
+		return LabelFasterLessAccurate
+	}
 	if goAcc.MaxULPFin <= refAcc.MaxULPFin {
 		return LabelAhead
 	}

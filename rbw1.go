@@ -39,8 +39,6 @@ const (
 	RBW1MaxLine = 4096
 	// RBW1MaxData bounds the bytes of one loaded argument file (256 MiB).
 	RBW1MaxData = 256 << 20
-	// rbw1MaxDim bounds cols and rows of a request.
-	rbw1MaxDim = 1 << 28
 	// rbw1MaxVersions bounds the pairs of a version reply.
 	rbw1MaxVersions = 256
 )
@@ -256,9 +254,6 @@ func (w *RBW1) ask(parts ...string) (RBW1Reply, error) {
 }
 
 func (w *RBW1) check(key, fn string) error {
-	if !rbw1KeyPattern.MatchString(key) {
-		return fmt.Errorf("rbw1: key %q is not a plain identifier", key)
-	}
 	if !w.funcs[fn] {
 		return fmt.Errorf("rbw1: function %q is not in the worker's table", fn)
 	}
@@ -293,7 +288,11 @@ func (w *RBW1) Load(key, path string, cols, rows int, want string) error {
 	if err := w.inDir(path); err != nil {
 		return err
 	}
-	if cols <= 0 || rows <= 0 || cols > rbw1MaxDim || rows > rbw1MaxDim || int64(cols)*int64(rows)*8 > RBW1MaxData {
+	// cols*rows*8 <= RBW1MaxData: each factor is bounded before the product is
+	// formed in int64, so nothing overflows, on 32 bits or 64 (and nothing
+	// divides: a zero factor is refused by its own comparison).
+	const maxCells = RBW1MaxData / 8
+	if cols <= 0 || rows <= 0 || int64(cols) > maxCells || int64(rows) > maxCells || int64(cols)*int64(rows) > maxCells {
 		return fmt.Errorf("rbw1: %d x %d float64 is outside 1..%d bytes", cols, rows, RBW1MaxData)
 	}
 	r, err := w.ask("L", key, path, strconv.Itoa(cols), strconv.Itoa(rows))

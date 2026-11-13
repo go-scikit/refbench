@@ -187,8 +187,12 @@ func TestLabel(t *testing.T) {
 		{Slower, inf1, inf1, 0, LabelBehind, "both infinite, same finite error: behind (was always behind)"},
 		{Slower, inf1, inf3, 0, LabelTradeoff, "Go's own max is infinite: the finite error still decides"},
 		{Slower, inf3, inf1, 0, LabelBehind, "ref more accurate on finite points"},
-		{Faster, inf1, inf3, 0, LabelAhead, "finite error decides ahead"},
-		{Faster, inf3, inf1, 0, LabelFasterLessAccurate, "finite error decides faster-less-accurate"},
+		{Faster, one, inf3, 0, LabelAhead, "the finite error decides against a reference that disagrees"},
+		{Faster, one, inf1, 0, LabelAhead, "tie on the finite error, the reference's own disagreement does not block"},
+		{Faster, two, inf1, 0, LabelFasterLessAccurate, "the finite error decides"},
+		{Faster, inf1, inf3, 0, LabelFasterLessAccurate, "Go's own disagreement blocks ahead"},
+		{Faster, &AccResult{MaxULPFin: 1, Coverage: 0.9}, &AccResult{MaxULPFin: 1, Coverage: 1}, 0, LabelFasterLessAccurate, "Go evaluates fewer points"},
+		{Faster, &AccResult{MaxULPFin: 1, Coverage: 1}, &AccResult{MaxULPFin: 1, Coverage: 0.9}, 0, LabelAhead, "Go evaluates more points"},
 	}
 	for _, c := range cases {
 		if got := Label(c.v, c.g, c.r, c.budget); got != c.want {

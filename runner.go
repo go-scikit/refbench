@@ -268,8 +268,8 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 		if k > 2 {
 			rd.RefsNs = make(map[string]float64, k-2)
 		}
-		for p := 0; p < k; p++ {
-			s := sides[order[p]]
+		for _, side := range order {
+			s := sides[side]
 			d, err := s.t(s.iters)
 			if err != nil {
 				return row, err
@@ -311,20 +311,20 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 // every ordered pair of sides is adjacent exactly once; for odd k the rows and
 // their reversals (2k rows) do. k = 2 gives {0,1}, {1,0}.
 func williamsOrders(k int) [][]int {
-	s := make([]int, k)
+	s := []int{0}
 	lo, hi := 1, k-1
-	for j := 1; j < k; j++ {
-		if j%2 == 1 {
-			s[j] = lo
+	for len(s) < k {
+		if len(s)%2 == 1 {
+			s = append(s, lo)
 			lo++
 		} else {
-			s[j] = hi
+			s = append(s, hi)
 			hi--
 		}
 	}
 	var out [][]int
 	for i := 0; i < k; i++ {
-		row := make([]int, k)
+		row := make([]int, len(s)) // len(s) == k; a zigzag of any other length is not a permutation
 		for j := range row {
 			row[j] = (s[j] + i) % k
 		}
