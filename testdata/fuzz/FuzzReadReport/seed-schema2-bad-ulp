@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"schema\":2,\"status\":\"deferred\",\"max_load\":8,\"rows\":[{\"name\":\"a\",\"func\":\"F\",\"allocs\":0,\"refs\":[{\"id\":\"x:y\",\"license\":\"MIT\",\"summary\":{\"median\":0,\"q1\":0,\"q3\":0},\"accuracy\":{\"max_ulp\":\"nan\",\"max_ulp_fin\":-1,\"coverage\":9,\"points\":-1}}]}]}")

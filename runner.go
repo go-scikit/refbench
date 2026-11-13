@@ -259,7 +259,9 @@ func runCase(ctx context.Context, c Case, opt Options) (Row, error) {
 		if err != nil {
 			return row, err
 		}
-		rd := Round{LoadBefore: load, GoFirst: sideIndex(sides, r%k, SideGo) < sideIndex(sides, r%k, SidePrimary)}
+		// Go is side 0 and the primary side 1: at position (i - r mod k) mod k.
+		goPos, primaryPos := (k-r%k)%k, (k+1-r%k)%k
+		rd := Round{LoadBefore: load, GoFirst: goPos < primaryPos}
 		if k > 2 {
 			rd.RefsNs = make(map[string]float64, k-2)
 		}
@@ -304,17 +306,6 @@ type roundSide struct {
 	id    string
 	t     Timer
 	iters int
-}
-
-// sideIndex returns the position of side id in the round whose rotation is rot.
-func sideIndex(sides []roundSide, rot int, id string) int {
-	k := len(sides)
-	for p := 0; p < k; p++ {
-		if sides[(rot+p)%k].id == id {
-			return p
-		}
-	}
-	return -1
 }
 
 // scoreAccuracy evaluates Go, the primary reference and every Ref with an Eval

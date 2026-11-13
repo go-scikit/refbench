@@ -69,7 +69,7 @@ func refsSection(b *bytes.Buffer, r *Report) {
 		for _, ref := range row.Refs {
 			if _, ok := names[ref.ID]; !ok {
 				ids = append(ids, ref.ID)
-				names[ref.ID] = ref.label()
+				names[ref.ID] = ref.ID // the ID is unambiguous; the best column shows the name
 			}
 		}
 	}
