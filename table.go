@@ -54,7 +54,113 @@ func Table(r *Report) []byte {
 		fmt.Fprintf(&b, "| %s | `%s` | %s | %s | %s | %s | %s | %s | %g |\n",
 			esc(row.Name), row.Func, esc(row.Reference), goCell, refCell, ratio, verdict, row.Parity, row.Allocs)
 	}
+	if r.usesRefs() {
+		refsSection(&b, r)
+	}
 	return b.Bytes()
+}
+
+// refsSection is the second section of a schema 2 table: Go against every other
+// reference, with the accuracy of each side. The first section is unchanged.
+func refsSection(b *bytes.Buffer, r *Report) {
+	var ids []string
+	names := map[string]string{}
+	for _, row := range r.Rows {
+		for _, ref := range row.Refs {
+			if _, ok := names[ref.ID]; !ok {
+				ids = append(ids, ref.ID)
+				names[ref.ID] = ref.ID // the ID is unambiguous; the best column shows the name
+			}
+		}
+	}
+	sort.Strings(ids)
+	b.WriteString("\n## Against other references\n\n")
+	b.WriteString("Ratio = Go / reference, from the same rounds as the table above. Each cell: ratio (verdict, label; max ulp, coverage). The headline is Go against the fastest side, primary reference included: a reference that is faster is a defect even when it is less accurate.\n\n")
+	b.WriteString("| case | Go ns | Go max ulp | best | ratio vs best | label |")
+	for _, id := range ids {
+		fmt.Fprintf(b, " %s |", esc(names[id]))
+	}
+	b.WriteString("\n|---|---:|---:|---|---:|---|")
+	for range ids {
+		b.WriteString("---|")
+	}
+	b.WriteString("\n")
+	for _, row := range r.Rows {
+		if !row.usesMultiRef() {
+			continue
+		}
+		goNs, goUlp, best, ratio, label := "—", ulpCell(row.GoAccuracy), "—", "—", "deferred"
+		if len(row.Rounds) > 0 {
+			goNs, label = fmt.Sprintf("%.4g", row.Go.Median), row.Verdict
+			if row.Best != "" { // a row with accuracy but no extra reference has no headline
+				best, ratio, label = esc(sideName(row, row.Best)), fmt.Sprintf("%.2f", row.BestRatio), row.BestVerdict
+			}
+			if row.BestLabel != "" {
+				label += ", " + row.BestLabel
+			}
+			if !row.Valid {
+				label = "invalid"
+			}
+		}
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s |", esc(row.Name), goNs, goUlp, best, ratio, label)
+		byID := map[string]RefRow{}
+		for _, ref := range row.Refs {
+			byID[ref.ID] = ref
+		}
+		for _, id := range ids {
+			ref, ok := byID[id]
+			switch {
+			case !ok:
+				b.WriteString(" — |")
+			case len(row.Rounds) == 0:
+				fmt.Fprintf(b, " deferred (%s) |", accCell(ref.Accuracy))
+			default:
+				v := ref.Verdict
+				if ref.Label != "" {
+					v += ", " + ref.Label
+				}
+				fmt.Fprintf(b, " %.2f (%s; %s) |", ref.Ratio, v, accCell(ref.Accuracy))
+			}
+		}
+		b.WriteString("\n")
+	}
+}
+
+func sideName(row Row, id string) string {
+	if id == SidePrimary {
+		return row.Reference
+	}
+	for _, ref := range row.Refs {
+		if ref.ID == id {
+			return ref.label()
+		}
+	}
+	return id
+}
+
+func ulpCell(a *AccResult) string {
+	if a == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%.3g", float64(a.MaxULP))
+}
+
+func covCell(a *AccResult) string {
+	if a == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%.0f%%", 100*a.Coverage)
+}
+
+func accCell(a *AccResult) string {
+	if a == nil {
+		return "no accuracy"
+	}
+	s := fmt.Sprintf("%.3g ulp, fin %.3g, cov %.0f%%", float64(a.MaxULP), float64(a.MaxULPFin), 100*a.Coverage)
+	if a.Disagree > 0 {
+		s += fmt.Sprintf(", %d disagree", a.Disagree)
+	}
+	return s
 }
 
 func cell(s Summary) string {

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"schema\":2,\"status\":\"measured\",\"max_load\":8,\"rows\":[{\"name\":\"a\",\"func\":\"F\",\"allocs\":0,\"refs\":[{\"id\":\"julia:x\",\"license\":\"MIT\",\"summary\":{\"median\":0,\"q1\":0,\"q3\":0},\"accuracy\":{\"max_ulp\":\"inf\",\"max_ulp_fin\":1.5,\"coverage\":0.5,\"points\":2}}],\"go_accuracy\":{\"max_ulp\":0,\"max_ulp_fin\":0,\"coverage\":1,\"points\":2},\"rounds\":[{\"load_before\":1,\"load_after\":1,\"go_ns\":2,\"ref_ns\":1,\"refs_ns\":{\"julia:x\":1},\"order\":[\"julia:x\",\"go\",\"primary\"]}]}]}")

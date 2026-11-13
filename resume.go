@@ -106,10 +106,18 @@ func MergeAllocs(prev, rec *Report) *Report {
 	}
 	out := *prev
 	out.Commit = rec.Commit // the allocation counts are those of this commit
+	out.Schema = rec.Schema // Finish raises it to 2 when a row keeps extra references
 	out.Rows = make([]Row, 0, len(rec.Rows))
 	for _, r := range rec.Rows {
 		if o, ok := old[r.Name]; ok {
 			o.Func, o.Reference, o.Parity, o.Allocs = r.Func, r.Reference, r.Parity, r.Allocs
+			if sameRefIDs(o.Refs, r.Refs) {
+				o.Refs = keepRefData(o.Refs, r.Refs)
+			} else {
+				// The set of references changed: the recorded rounds measured
+				// another set and cannot be kept. The row is deferred again.
+				o.Rounds, o.Refs, o.GoAccuracy, o.PrimaryAccuracy, o.GoBudget = nil, r.Refs, nil, nil, 0
+			}
 			r = o
 		}
 		out.Rows = append(out.Rows, r)

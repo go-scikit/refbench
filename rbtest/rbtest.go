@@ -80,9 +80,12 @@ var flagSet = func(name string) bool {
 	return set
 }
 
+// readBuildInfo is replaceable by tests.
+var readBuildInfo = debug.ReadBuildInfo
+
 // buildModule is the module path of the running binary; tests replace it.
 var buildModule = func() string {
-	if bi, ok := debug.ReadBuildInfo(); ok {
+	if bi, ok := readBuildInfo(); ok {
 		return bi.Main.Path
 	}
 	return ""

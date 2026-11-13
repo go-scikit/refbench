@@ -48,6 +48,16 @@ type Case struct {
 	// Ref times the reference body, inside the reference's process. Nil for a
 	// case only used by the allocation check.
 	Ref Timer
+	// Refs are additional references (Julia, Boost, Fortran, R, ...), timed in
+	// the same rounds as Go and Ref. May be empty: a case with no Refs writes
+	// the schema 1 files it always wrote.
+	Refs []Ref
+	// RefEval evaluates the primary reference on the accuracy points; nil gives
+	// it no accuracy column. Used only with Accuracy.
+	RefEval EvalFunc
+	// Accuracy, when set, scores Go, the primary reference and every Ref that
+	// has an Eval on the same points, once, before the timing rounds.
+	Accuracy *Accuracy
 }
 
 // Validate checks a registry: unique names, the required fields, a known parity.
@@ -66,6 +76,9 @@ func Validate(cases []Case) error {
 		case c.Parity != ParityExact && c.Parity != ParityTolerance && c.Parity != ParityNone:
 			return fmt.Errorf("case %q: unknown parity %q", c.Name, c.Parity)
 		}
+		if err := validateRefs(c); err != nil {
+			return err
+		}
 		seen[c.Name] = true
 	}
 	return nil
@@ -75,7 +88,15 @@ var errNoTime = errors.New("a calibration run took no measurable time")
 
 // Calibrate returns the iteration count for which one run of t lasts at least
 // minDur: it doubles from 1, then scales by the last measurement.
+//
+// One untimed call comes first and its result is discarded. A reference that
+// compiles on its first call (Julia) would otherwise last longer than minDur at
+// iters = 1, and Calibrate would settle on single-call samples. The call costs
+// one iteration and is harmless for any other reference.
 func Calibrate(t Timer, minDur time.Duration) (int, error) {
+	if _, err := t(1); err != nil {
+		return 0, err
+	}
 	// 1<<40 on 64-bit targets; half of MaxInt where int is 32 bits (a constant
 	// larger than int does not compile there).
 	const maxIters = min(1<<40, math.MaxInt>>1)

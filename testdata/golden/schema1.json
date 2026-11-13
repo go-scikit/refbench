@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "status": "measured",
+  "date": "2026-11-07T12:00:00Z",
+  "commit": "abc",
+  "repo": "go-x/y",
+  "go_version": "go1.27.3",
+  "machine": "m",
+  "ref_versions": {
+    "blas": "accelerate",
+    "numpy": "2.5.4"
+  },
+  "max_load": 8,
+  "load": {
+    "min": 1,
+    "median": 1.5,
+    "max": 4
+  },
+  "valid": true,
+  "rows": [
+    {
+      "name": "slow|row",
+      "func": "F",
+      "reference": "ref|x",
+      "parity": "exact",
+      "allocs": 2,
+      "go_iters": 10,
+      "ref_iters": 10,
+      "rounds": [
+        {
+          "load_before": 1,
+          "load_after": 2,
+          "go_first": true,
+          "go_ns": 100,
+          "ref_ns": 10
+        },
+        {
+          "load_before": 3,
+          "load_after": 4,
+          "go_first": false,
+          "go_ns": 110,
+          "ref_ns": 11
+        }
+      ],
+      "valid": true,
+      "go": {
+        "median": 105,
+        "q1": 102.5,
+        "q3": 107.5
+      },
+      "ref": {
+        "median": 10.5,
+        "q1": 10.25,
+        "q3": 10.75
+      },
+      "ratio": 10,
+      "verdict": "slower"
+    },
+    {
+      "name": "fast",
+      "func": "G",
+      "reference": "ref",
+      "parity": "tolerance",
+      "allocs": 0,
+      "rounds": [
+        {
+          "load_before": 1,
+          "load_after": 1,
+          "go_first": true,
+          "go_ns": 1,
+          "ref_ns": 10
+        }
+      ],
+      "valid": true,
+      "go": {
+        "median": 1,
+        "q1": 1,
+        "q3": 1
+      },
+      "ref": {
+        "median": 10,
+        "q1": 10,
+        "q3": 10
+      },
+      "ratio": 0.1,
+      "verdict": "faster"
+    }
+  ]
+}
