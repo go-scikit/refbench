@@ -485,8 +485,16 @@ func TestRootGuard(t *testing.T) {
 	if got := outcome(func() { perf(&fakeT{}, cfg, refbench.Options{}) }); !strings.Contains(got, "cannot read the root module") {
 		t.Errorf("no go.mod: %s", got)
 	}
-	// The module itself (no bench/ module) is allowed, and so is its bench/.
-	for _, mod := range []string{"example.com/lib", "example.com/lib/bench"} {
+	// A sibling that only shares a prefix with the root module is not its own.
+	cfg = repo(t, fixedRef)
+	setFlags(t, false, true)
+	buildModule = func() string { return "example.com/libx/bench" }
+	if got := outcome(func() { perf(&fakeT{}, cfg, refbench.Options{}) }); !strings.HasPrefix(got, "fatal: refusing to write docs") {
+		t.Errorf("prefix sibling: %s", got)
+	}
+	// The module itself (no bench/ module) is allowed, and so are its bench/
+	// and a bench module nested deeper (go-simd/floats keeps it at bench/perf).
+	for _, mod := range []string{"example.com/lib", "example.com/lib/bench", "example.com/lib/bench/perf"} {
 		cfg = repo(t, fixedRef)
 		setFlags(t, false, true)
 		buildModule = func() string { return mod }
@@ -499,6 +507,27 @@ func TestRootGuard(t *testing.T) {
 	buildModule = func() string { return "example.com/other/bench" }
 	if got := outcome(func() { perf(&fakeT{}, cfg, refbench.Options{}) }); got != "ok" {
 		t.Errorf("CI mode: %s", got)
+	}
+}
+
+// ownsModule answers both ways: what a repository owns, and what it must not.
+func TestOwnsModule(t *testing.T) {
+	for _, c := range []struct {
+		root, self string
+		want       bool
+	}{
+		{"github.com/o/r", "github.com/o/r", true},
+		{"github.com/o/r", "github.com/o/r/bench", true},
+		{"github.com/o/r", "github.com/o/r/bench/perf", true},
+		{"github.com/o/r", "github.com/o/rx", false},
+		{"github.com/o/r", "github.com/o/rx/bench", false},
+		{"github.com/o/r", "github.com/o", false},
+		{"github.com/o/r", "github.com/p/r/bench", false},
+		{"github.com/o/r/bench", "github.com/o/r", false},
+	} {
+		if got := ownsModule(c.root, c.self); got != c.want {
+			t.Errorf("ownsModule(%q, %q) = %v, want %v", c.root, c.self, got, c.want)
+		}
 	}
 }
 

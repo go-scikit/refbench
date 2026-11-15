@@ -23,8 +23,8 @@
 // -perf.run the test never times anything. -perf.record keeps the recorded
 // timings and only updates the allocation counts.
 //
-// Nothing is written unless the repository root's go.mod names the parent of
-// this binary's module (a bench/ module of that repository): a binary of one
+// Nothing is written unless the repository root's go.mod names an ancestor of
+// this binary's module (a bench/ or bench/perf/ module of that repository): a binary of one
 // repository run from another's bench/ directory refuses, naming both.
 package rbtest
 
@@ -35,7 +35,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -108,9 +107,17 @@ func modulePath(file string) (string, error) {
 	return "", fmt.Errorf("%s: no module line", file)
 }
 
+// ownsModule reports whether the repository whose root module is root owns
+// the module self: the same module, or one nested anywhere below it
+// (github.com/o/r owns github.com/o/r/bench and github.com/o/r/bench/perf).
+// A sibling that merely shares a prefix (github.com/o/rx) is not owned.
+func ownsModule(root, self string) bool {
+	return self == root || strings.HasPrefix(self, root+"/")
+}
+
 // checkRoot refuses to touch docs/ of a repository that is not the binary's
-// own: the module of cfg.Root's go.mod must be the parent of the binary's
-// module (github.com/o/r for github.com/o/r/bench), or the same module.
+// own: the module of cfg.Root's go.mod must be the binary's module or an
+// ancestor of it (github.com/o/r for github.com/o/r/bench or .../bench/perf).
 func checkRoot(cfg refbench.CIConfig) error {
 	goMod := filepath.Join(cfg.Root, "go.mod")
 	root, err := modulePath(goMod)
@@ -121,8 +128,8 @@ func checkRoot(cfg refbench.CIConfig) error {
 	if self == "" {
 		return errors.New("refusing to write docs: this binary carries no module path")
 	}
-	if self != root && path.Dir(self) != root {
-		return fmt.Errorf("refusing to write docs: this binary's module is %q, but %s declares module %q, which is not its parent (a binary of one repository was run from another's bench directory?)", self, goMod, root)
+	if !ownsModule(root, self) {
+		return fmt.Errorf("refusing to write docs: this binary's module is %q, but %s declares module %q, which is not an ancestor of it (a binary of one repository was run from another's bench directory?)", self, goMod, root)
 	}
 	return nil
 }
