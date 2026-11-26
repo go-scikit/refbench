@@ -17,8 +17,8 @@ import "github.com/go-scikit/refbench"
 ## Install
 
 ```sh
-go get github.com/go-scikit/refbench@v0.1.0                       # the library, and rbtest
-GOBIN=~/.local/bin go install github.com/go-scikit/refbench/cmd/refbench@v0.1.0
+go get github.com/go-scikit/refbench@v0.4.1                       # the library, and rbtest
+GOBIN=~/.local/bin go install github.com/go-scikit/refbench/cmd/refbench@v0.4.1
 ```
 
 ## What a run does
@@ -320,7 +320,7 @@ valid row, drafts nothing; a partial one drafts from its valid rows.
 - The R worker; a shared home for the per-library kernels (Boost, AMOS,
   QUADPACK, MINPACK); `refbench prepare`.
 
-## Not in v0.1.0
+## Not yet (as of v0.4.1)
 
 - Closing or commenting on an issue whose row is no longer slower.
 - Expected allocation counts in the registry (perf.json is the record).
